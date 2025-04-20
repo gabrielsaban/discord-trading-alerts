@@ -8,9 +8,9 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.base import JobLookupError
 
 # Import our modules
-from binance import fetch_market_data
-from alerts import AlertManager
-from db import get_db
+from bot.binance import fetch_market_data
+from bot.alerts import AlertManager
+from bot.db import get_db
 
 # Setup logging
 logging.basicConfig(
@@ -205,7 +205,7 @@ class AlertScheduler:
     
     def setup_user_alerts(self, manager: AlertManager, user_id: str, symbol: str, interval: str, settings: Dict[str, Any]):
         """Set up alerts based on user preferences"""
-        from alerts import (
+        from bot.alerts import (
             RsiAlert, MacdAlert, EmaCrossAlert, BollingerBandAlert,
             VolumeSpikeAlert, AdxAlert, PatternAlert
         )
@@ -359,7 +359,7 @@ def get_scheduler(alert_callback: Callable = None) -> AlertScheduler:
 # Test functionality
 async def test_scheduler():
     """Test the scheduler functionality"""
-    from db import DatabaseManager
+    from bot.db import DatabaseManager
     
     # Create a test database in memory
     # Need to pass special parameters to avoid directory creation for in-memory DB

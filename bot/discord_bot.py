@@ -8,9 +8,9 @@ from discord import app_commands
 from dotenv import load_dotenv
 
 # Load our modules
-from db import get_db
-from scheduler import get_scheduler
-from binance import fetch_market_data
+from bot.db import get_db
+from bot.scheduler import get_scheduler
+from bot.binance import fetch_market_data
 
 # Set up logging
 logging.basicConfig(

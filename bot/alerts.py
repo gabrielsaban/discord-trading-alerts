@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime, timedelta
 
 # Import indicator functions
-from indicators import (
+from bot.indicators import (
     calculate_rsi, 
     calculate_macd, 
     calculate_ema_cross, 
