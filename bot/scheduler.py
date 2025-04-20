@@ -360,12 +360,32 @@ class AlertScheduler:
             }
     
     def stop(self):
-        """Stop the scheduler"""
+        """Stop the scheduler and clean up resources"""
         with self.lock:
             if self.running:
-                self.scheduler.shutdown()
-                self.running = False
-                logger.info("Alert scheduler stopped")
+                try:
+                    # Remove all jobs first
+                    for job in self.scheduler.get_jobs():
+                        try:
+                            self.scheduler.remove_job(job.id)
+                            logger.info(f"Removed scheduled job: {job.id}")
+                        except JobLookupError:
+                            continue
+                    
+                    # Shutdown the scheduler
+                    self.scheduler.shutdown(wait=False)
+                    
+                    # Clear internal data structures
+                    self.user_alert_managers.clear()
+                    self.scheduled_symbols.clear()
+                    self.last_run.clear()
+                    
+                    self.running = False
+                    logger.info("Alert scheduler stopped successfully")
+                except Exception as e:
+                    logger.error(f"Error stopping scheduler: {e}")
+                    # Still mark as not running
+                    self.running = False
 
 
 # Singleton instance

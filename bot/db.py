@@ -128,11 +128,22 @@ class DatabaseManager:
             raise
     
     def close(self):
-        """Close the database connection for the current thread"""
-        if hasattr(self.local, 'connection') and self.local.connection:
-            self.local.connection.close()
-            self.local.connection = None
-            logger.info(f"Database connection closed in thread {threading.get_ident()}")
+        """Close all database connections"""
+        try:
+            # Close the connection in the current thread
+            if hasattr(self.local, 'connection') and self.local.connection:
+                self.local.connection.close()
+                self.local.connection = None
+                logger.info(f"Database connection closed in thread {threading.get_ident()}")
+                
+            # In a production environment, there might be multiple thread-local connections
+            # We can't directly access other thread's connections, but if the app is shutting down,
+            # SQLite will close them automatically when the process ends
+            
+            # Log the closure attempt
+            logger.info("Database connections closure requested")
+        except Exception as e:
+            logger.error(f"Error closing database connection: {e}")
     
     # User management methods
     def create_user(self, user_id: str, username: str, discord_id: str = None) -> bool:
