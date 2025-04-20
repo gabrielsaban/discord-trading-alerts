@@ -137,16 +137,16 @@ class DatabaseManager:
     # User management methods
     def create_user(self, user_id: str, username: str, discord_id: str = None) -> bool:
         """
-        Create a new user in the database
+        Create a new user
         
         Parameters:
         -----------
         user_id : str
             Unique identifier for the user
         username : str
-            User's display name
+            Display name of the user
         discord_id : str, optional
-            Discord ID for notifications
+            Discord user ID if applicable
             
         Returns:
         --------
@@ -157,13 +157,27 @@ class DatabaseManager:
             cursor = self.connection.cursor()
             settings = json.dumps(DEFAULT_ALERT_SETTINGS)
             
-            cursor.execute(
-                "INSERT OR IGNORE INTO users (user_id, username, discord_id, settings) VALUES (?, ?, ?, ?)",
-                (user_id, username, discord_id, settings)
-            )
+            # Check if user already exists (might need to update discord_id)
+            cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+            existing_user = cursor.fetchone()
+            
+            if existing_user:
+                # Update existing user's discord_id if provided
+                if discord_id is not None:
+                    cursor.execute(
+                        "UPDATE users SET discord_id = ? WHERE user_id = ?",
+                        (discord_id, user_id)
+                    )
+            else:
+                # Insert new user
+                cursor.execute(
+                    "INSERT INTO users (user_id, username, discord_id, settings) VALUES (?, ?, ?, ?)",
+                    (user_id, username, discord_id, settings)
+                )
             
             self.connection.commit()
-            return cursor.rowcount > 0
+            # Return True since either the user was created or updated successfully
+            return True
         except sqlite3.Error as e:
             logger.error(f"Error creating user {username}: {e}")
             self.connection.rollback()
@@ -415,12 +429,22 @@ class DatabaseManager:
         """Get all symbols being watched by any user"""
         try:
             cursor = self.connection.cursor()
+            # Using DISTINCT to ensure unique symbol-interval pairs
             cursor.execute(
                 "SELECT DISTINCT symbol, interval FROM watchlists WHERE is_active = 1"
             )
             rows = cursor.fetchall()
             
-            return [(row['symbol'], row['interval']) for row in rows]
+            # Convert to list of tuples
+            symbol_pairs = [(row['symbol'], row['interval']) for row in rows]
+            
+            # Use a set to remove any potential duplicates and convert back to list for expected return type
+            unique_pairs = list(set(symbol_pairs))
+            
+            # For debugging
+            logger.debug(f"All active symbols returned: {unique_pairs}")
+            
+            return unique_pairs
         except sqlite3.Error as e:
             logger.error(f"Error fetching active symbols: {e}")
             return []
