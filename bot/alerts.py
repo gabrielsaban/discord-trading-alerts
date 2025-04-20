@@ -184,7 +184,7 @@ class BollingerBandAlert(AlertCondition):
         if not self.can_trigger():
             return None
             
-        bb = calculate_bollinger_bands(df, normalize=True)
+        bb = calculate_bollinger_bands(df, length=20, std=2, normalize=True)
         if bb is None or len(bb) < 2:
             return None
             
@@ -226,7 +226,7 @@ class VolumeSpikeAlert(AlertCondition):
         if not self.can_trigger():
             return None
             
-        vol_df = calculate_volume_spikes(df, threshold=self.threshold, z_score=self.z_score)
+        vol_df = calculate_volume_spikes(df, length=20, threshold=self.threshold, z_score=self.z_score)
         if vol_df is None or len(vol_df) < 1:
             return None
             
@@ -261,7 +261,7 @@ class AdxAlert(AlertCondition):
         if not self.can_trigger():
             return None
             
-        adx_df = calculate_adx(df, threshold=self.threshold)
+        adx_df = calculate_adx(df, length=14, threshold=self.threshold)
         if adx_df is None or len(adx_df) < 2:
             return None
             
