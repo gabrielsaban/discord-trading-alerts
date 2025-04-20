@@ -307,6 +307,13 @@ async def unwatch_command(
     success = bot.db.remove_from_watchlist(user_id, symbol, interval)
     
     if success:
+        # Check if any users are still watching this symbol/interval
+        users_watching = bot.db.get_users_watching_symbol(symbol, interval)
+        
+        # If no users are watching, remove the symbol from the scheduler
+        if not users_watching:
+            bot.scheduler.remove_symbol(symbol, interval)
+        
         await interaction.followup.send(
             f"🔕 Removed {symbol} ({interval}) from your watchlist.",
             ephemeral=True
