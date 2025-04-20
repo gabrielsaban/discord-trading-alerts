@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime, timedelta
+import logging
 
 # Import indicator functions
 from bot.indicators import (
@@ -12,6 +13,9 @@ from bot.indicators import (
     calculate_volume_spikes,
     calculate_adx
 )
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 
 class AlertCondition:
@@ -50,12 +54,19 @@ class AlertCondition:
     
     def can_trigger(self) -> bool:
         """Check if alert can trigger based on cooldown"""
-        if self.last_triggered is None:
+        now = datetime.now()
+        if not self.last_triggered:
+            logger.debug(f"{type(self).__name__} for {self.symbol} has never triggered before")
             return True
             
-        now = datetime.now()
         elapsed = now - self.last_triggered
-        return elapsed > self.cooldown
+        cooldown_expired = elapsed > self.cooldown
+        
+        if not cooldown_expired:
+            minutes_remaining = int(self.cooldown.total_seconds() / 60) - int(elapsed.total_seconds() / 60)
+            logger.debug(f"{type(self).__name__} for {self.symbol} in cooldown ({minutes_remaining} minutes remaining)")
+        
+        return cooldown_expired
     
     def mark_triggered(self):
         """Mark alert as triggered now"""
@@ -89,6 +100,7 @@ class RsiAlert(AlertCondition):
             
         rsi = calculate_rsi(df)
         if rsi is None or len(rsi) < 2:
+            logger.debug(f"RSI calculation failed for {self.symbol}")
             return None
             
         # Get last two values to detect crosses
@@ -96,12 +108,17 @@ class RsiAlert(AlertCondition):
         latest_price = df['close'].iloc[-1]
         price_str = self.format_price(latest_price)
         
+        # Debug log
+        logger.debug(f"RSI check for {self.symbol}: prev_rsi={prev_rsi:.1f}, latest_rsi={latest_rsi:.1f}, oversold={self.oversold}, overbought={self.overbought}")
+        
         message = None
         # Check for oversold condition (crossing below threshold)
         if latest_rsi < self.oversold and prev_rsi >= self.oversold:
+            logger.info(f"RSI oversold alert triggered for {self.symbol}: prev_rsi={prev_rsi:.1f}, latest_rsi={latest_rsi:.1f}, threshold={self.oversold}")
             message = f"🔴 **RSI OVERSOLD**: {self.symbol} RSI at {latest_rsi:.1f} | Price: {price_str}"
         # Check for overbought condition (crossing above threshold)
         elif latest_rsi > self.overbought and prev_rsi <= self.overbought:
+            logger.info(f"RSI overbought alert triggered for {self.symbol}: prev_rsi={prev_rsi:.1f}, latest_rsi={latest_rsi:.1f}, threshold={self.overbought}")
             message = f"🟢 **RSI OVERBOUGHT**: {self.symbol} RSI at {latest_rsi:.1f} | Price: {price_str}"
         
         if message:
@@ -410,12 +427,17 @@ class AlertManager:
     def check_alerts(self, symbol: str, df: pd.DataFrame) -> List[str]:
         """Check all alerts for a symbol and return triggered messages"""
         if symbol not in self.alerts:
+            logger.debug(f"No alerts registered for {symbol}")
             return []
             
+        logger.debug(f"Checking {len(self.alerts[symbol])} alerts for {symbol}")
+        
         triggered = []
         for alert in self.alerts[symbol]:
+            logger.debug(f"Checking alert type {type(alert).__name__} for {symbol}")
             message = alert.check(df)
             if message:
+                logger.info(f"Alert triggered: {message}")
                 triggered.append(message)
         
         return triggered
