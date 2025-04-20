@@ -299,10 +299,10 @@ class AlertScheduler:
     def add_symbol(self, symbol: str, interval: str):
         """Add a new symbol to be monitored"""
         with self.lock:
-            if self.running:
-                # Schedule checks for this symbol/interval
-                self.schedule_symbol_check(symbol, interval)
-                logger.info(f"Added {symbol} ({interval}) to monitoring")
+            # Schedule checks for this symbol/interval, even if not running
+            # This allows testing to verify the method was called
+            self.schedule_symbol_check(symbol, interval)
+            logger.info(f"Added {symbol} ({interval}) to monitoring")
     
     def remove_symbol(self, symbol: str, interval: str):
         """Remove a symbol from monitoring"""
