@@ -74,7 +74,7 @@ python main.py
 | `/watch BTCUSDT` | Start tracking a pair |
 | `/unwatch BTCUSDT` | Stop tracking |
 | `/list` | Show all your tracked pairs |
-| `/settings` | Adjust alert thresholds (WIP) |
+| `/settings` | Adjust alert thresholds |
 
 ---
 
@@ -89,7 +89,13 @@ discord-trading-alerts/
 │   ├── scheduler.py        # APScheduler integration
 │   ├── db.py               # SQLite user storage
 │   └── discord_bot.py      # Command logic
-├── .env.example
+├── data/
+│   └── alerts.db           # SQLite database
+├── tests/
+│   ├── test_indicators.py  # Unit tests for indicators
+│   ├── test_binance.py     # Tests for the Binance API
+│   └── conftest.py         # Test fixtures
+├── .env
 ├── requirements.txt
 ├── README.md
 └── main.py
@@ -99,7 +105,14 @@ discord-trading-alerts/
 
 ## 📅 Roadmap
 
-- [ ] User-defined indicator thresholds
+- [X] User-defined indicator thresholds
+- [ ] `/monitor` command to display permanent embeds with live crypto pair prices and current indicator statuses
+- [ ] `/status` command to show countdown timers until next check for each watched pair
+- [ ] Decoupled checking frequency - check all timeframes more frequently regardless of their interval
+- [ ] Config centralization - move all thresholds, periods, jitter %, etc. into a central YAML/JSON config for runtime tweaks
+- [ ] More customizable alert settings and notification options
+- [ ] Process separation - run the scheduler as a dedicated microservice to maintain alert timing during bot restarts
+
 - [ ] Web dashboard (Flask/FastAPI)
 - [ ] Telegram version
 - [ ] Stocks integration (`yfinance`)
