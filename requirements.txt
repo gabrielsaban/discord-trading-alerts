@@ -2,5 +2,11 @@ discord.py==2.3.2
 pandas==2.1.2
 pandas-ta==0.3.14b0
 requests==2.31.0
-python-dotenv==1.0.0
+python-dotenv==1.0.5
 apscheduler==3.10.4
+
+# Testing and linting
+pytest==7.4.3
+pytest-cov==4.1.0
+black==23.10.1
+flake8==6.1.0
