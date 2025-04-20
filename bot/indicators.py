@@ -1,7 +1,11 @@
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+import logging
 from typing import Optional
+
+# Setup logging
+logger = logging.getLogger('trading_alerts.indicators')
 
 
 def validate_data(df: pd.DataFrame, min_periods: int) -> bool:
@@ -67,7 +71,7 @@ def calculate_rsi(df: pd.DataFrame, length: int = 14, normalize: bool = False) -
             
         return rsi
     except Exception as e:
-        print(f"Error calculating RSI: {e}")
+        logger.error(f"Error calculating RSI: {e}")
         return None
 
 
@@ -104,7 +108,7 @@ def calculate_macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int
         }
         return macd_df.rename(columns=col_map)
     except Exception as e:
-        print(f"Error calculating MACD: {e}")
+        logger.error(f"Error calculating MACD: {e}")
         return None
 
 
@@ -142,7 +146,7 @@ def calculate_ema_cross(df: pd.DataFrame, short: int = 9, long: int = 21) -> Opt
         
         return result
     except Exception as e:
-        print(f"Error calculating EMA cross: {e}")
+        logger.error(f"Error calculating EMA cross: {e}")
         return None
 
 
@@ -174,7 +178,7 @@ def calculate_bollinger_bands(df: pd.DataFrame, length: int = 20, std: float = 2
         # Get the Bollinger Bands - this produces different column names than we expected
         bb = ta.bbands(df['close'], length=length, std=std)
         if bb is None or bb.empty:
-            print("pandas-ta bbands returned None or empty dataframe")
+            logger.error("pandas-ta bbands returned None or empty dataframe")
             return None
 
         # Create a new result dataframe with our standard column names
@@ -208,7 +212,7 @@ def calculate_bollinger_bands(df: pd.DataFrame, length: int = 20, std: float = 2
             
         return result
     except Exception as e:
-        print(f"Error calculating Bollinger Bands: {e}")
+        logger.error(f"Error calculating Bollinger Bands: {e}")
         return None
 
 
@@ -252,7 +256,7 @@ def calculate_volume_spikes(df: pd.DataFrame, length: int = 20, threshold: float
             
         return result
     except Exception as e:
-        print(f"Error calculating volume spikes: {e}")
+        logger.error(f"Error calculating volume spikes: {e}")
         return None
 
 
@@ -293,7 +297,7 @@ def calculate_adx(df: pd.DataFrame, length: int = 14, threshold: int = 25) -> Op
         
         return adx_df
     except Exception as e:
-        print(f"Error calculating ADX: {e}")
+        logger.error(f"Error calculating ADX: {e}")
         return None
 
 
@@ -304,21 +308,21 @@ if __name__ == "__main__":
     pairs = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT"]
     
     for pair in pairs:
-        print(f"\n====== Testing {pair} ======\n")
+        logger.info(f"\n====== Testing {pair} ======\n")
         df = fetch_market_data(symbol=pair, limit=200)
         
-        print(f"Data validation: {validate_data(df, 50)}")
-        print(f"Data shape: {df.shape}")
+        logger.info(f"Data validation: {validate_data(df, 50)}")
+        logger.info(f"Data shape: {df.shape}")
         
         # Safe printing function for just first/last few rows
         def safe_print(name, result):
-            print(f"{name}:")
+            logger.info(f"{name}:")
             if result is not None:
-                print(f"- Shape: {result.shape}")
-                print(f"- First 2 rows: {result.head(2)}")
-                print(f"- Last 2 rows: {result.tail(2)}")
+                logger.info(f"- Shape: {result.shape}")
+                logger.info(f"- First 2 rows: {result.head(2)}")
+                logger.info(f"- Last 2 rows: {result.tail(2)}")
             else:
-                print("Calculation returned None")
+                logger.info("Calculation returned None")
         
         # Test all indicators
         safe_print("RSI", calculate_rsi(df))
