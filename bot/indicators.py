@@ -195,7 +195,14 @@ def calculate_bollinger_bands(df: pd.DataFrame, length: int = 20, std: float = 2
             result['BBM'] = bb[f'BBM_{length}_{std}']
             result['BBU'] = bb[f'BBU_{length}_{std}']
         
-        # Calculate bandwidth (BBB is already available from pandas-ta but we recalculate for clarity)
+        # Ensure lower band <= middle band <= upper band
+        # Handle any potential calculation errors or edge cases
+        valid_rows = result.notna().all(axis=1)
+        if not valid_rows.all():
+            # Drop NaN rows for proper calculation
+            result = result.loc[valid_rows]
+            
+        # Calculate bandwidth only for valid rows
         result['BandWidth'] = (result['BBU'] - result['BBL']) / result['BBM']
         
         if normalize:
