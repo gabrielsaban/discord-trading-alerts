@@ -65,12 +65,13 @@ class AlertScheduler:
             Function to call when alerts are triggered (user_id, list_of_alerts)
         """
         # Don't store a db reference, we'll get a fresh one in each method
-        self.alert_managers: Dict[str, AlertManager] = {}  # One manager per symbol/interval
+        self.user_alert_managers: Dict[str, Dict[str, AlertManager]] = {}  # user_id -> {symbol_interval -> AlertManager}
         self.scheduler = BackgroundScheduler()
         self.alert_callback = alert_callback
         self.running = False
         self.last_run: Dict[Tuple[str, str], datetime] = {}  # (symbol, interval) -> last run time
         self.lock = threading.RLock()  # For thread safety
+        self.scheduled_symbols = set()  # Track which symbols are scheduled
     
     def initialize(self):
         """Initialize the scheduler and load watched symbols"""
@@ -85,9 +86,9 @@ class AlertScheduler:
                 logger.info("No symbols found in watchlists")
                 return
             
-            # Initialize alert managers for each symbol/interval
+            # Schedule checks for each symbol/interval
             for symbol, interval in symbols:
-                self.ensure_alert_manager(symbol, interval)
+                self.schedule_symbol_check(symbol, interval)
             
             # Start the scheduler
             if not self.scheduler.running:
@@ -95,24 +96,27 @@ class AlertScheduler:
                 self.running = True
                 logger.info("Alert scheduler started")
     
-    def ensure_alert_manager(self, symbol: str, interval: str) -> AlertManager:
-        """Get or create an alert manager for a symbol/interval pair"""
+    def get_user_alert_manager(self, user_id: str, symbol: str, interval: str) -> AlertManager:
+        """Get or create an alert manager for a specific user, symbol, and interval"""
+        if user_id not in self.user_alert_managers:
+            self.user_alert_managers[user_id] = {}
+        
         key = f"{symbol.upper()}_{interval}"
+        if key not in self.user_alert_managers[user_id]:
+            self.user_alert_managers[user_id][key] = AlertManager()
         
-        if key not in self.alert_managers:
-            # Create a new alert manager
-            manager = AlertManager()
-            self.alert_managers[key] = manager
-            
-            # Schedule periodic checks for this symbol/interval
-            self.schedule_symbol_check(symbol, interval)
-            
-            logger.info(f"Created alert manager for {symbol} ({interval})")
-        
-        return self.alert_managers[key]
+        return self.user_alert_managers[user_id][key]
     
     def schedule_symbol_check(self, symbol: str, interval: str):
         """Schedule periodic checks for a symbol/interval pair"""
+        symbol_key = f"{symbol.upper()}_{interval}"
+        
+        # Skip if already scheduled
+        if symbol_key in self.scheduled_symbols:
+            return
+            
+        self.scheduled_symbols.add(symbol_key)
+        
         seconds = DEFAULT_INTERVALS.get(interval, 900)  # Default to 15m if unknown
         
         # Add some jitter to avoid all checks happening at once
@@ -175,15 +179,15 @@ class AlertScheduler:
                     logger.info(f"No users watching {symbol} ({interval})")
                     return
                 
-                # Get the alert manager for this symbol/interval
-                manager = self.ensure_alert_manager(symbol, interval)
-                
-                # Check alerts for each user
+                # Process alerts for each user independently
                 for user_id in users:
                     # Get user settings
                     user = db.get_user(user_id)
                     if not user or not user.get('is_active', False):
                         continue
+                    
+                    # Get the alert manager for this user/symbol/interval
+                    manager = self.get_user_alert_manager(user_id, symbol, interval)
                     
                     # Set up alerts based on user preferences
                     self.setup_user_alerts(manager, user_id, symbol, interval, user['settings'])
@@ -296,18 +300,18 @@ class AlertScheduler:
         """Add a new symbol to be monitored"""
         with self.lock:
             if self.running:
-                # Ensure we have an alert manager for this symbol
-                self.ensure_alert_manager(symbol, interval)
+                # Schedule checks for this symbol/interval
+                self.schedule_symbol_check(symbol, interval)
                 logger.info(f"Added {symbol} ({interval}) to monitoring")
     
     def remove_symbol(self, symbol: str, interval: str):
         """Remove a symbol from monitoring"""
         with self.lock:
-            key = f"{symbol.upper()}_{interval}"
+            symbol_key = f"{symbol.upper()}_{interval}"
             
-            if key in self.alert_managers:
-                # Remove the alert manager
-                del self.alert_managers[key]
+            if symbol_key in self.scheduled_symbols:
+                # Remove from scheduled symbols
+                self.scheduled_symbols.remove(symbol_key)
                 
                 # Remove the scheduled job
                 job_id = f"check_{symbol.upper()}_{interval}"
@@ -315,6 +319,11 @@ class AlertScheduler:
                     self.scheduler.remove_job(job_id)
                 except JobLookupError:
                     pass
+                
+                # Remove all user alert managers for this symbol/interval
+                for user_id in list(self.user_alert_managers.keys()):
+                    if symbol_key in self.user_alert_managers[user_id]:
+                        del self.user_alert_managers[user_id][symbol_key]
                 
                 logger.info(f"Removed {symbol} ({interval}) from monitoring")
     
@@ -333,11 +342,21 @@ class AlertScheduler:
             for (symbol, interval), run_time in self.last_run.items():
                 last_run_formatted[f"{symbol}_{interval}"] = run_time.strftime('%Y-%m-%d %H:%M:%S')
             
+            # Get user-specific stats
+            user_stats = {}
+            for user_id, alert_managers in self.user_alert_managers.items():
+                user_stats[user_id] = {
+                    'symbols': len(alert_managers),
+                    'alerts': sum(manager.get_alert_count() for manager in alert_managers.values())
+                }
+            
             return {
                 'running': self.running,
-                'active_symbols': len(self.alert_managers),
+                'active_symbols': len(self.scheduled_symbols),
+                'scheduled_symbols': list(self.scheduled_symbols),
                 'jobs': active_jobs,
-                'last_runs': last_run_formatted
+                'last_runs': last_run_formatted,
+                'user_stats': user_stats
             }
     
     def stop(self):
