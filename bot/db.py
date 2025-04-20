@@ -33,9 +33,12 @@ class DatabaseManager:
     def __init__(self, db_path: str = DB_PATH):
         """Initialize database connection and ensure tables exist"""
         # Create data directory if it doesn't exist
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        
         self.db_path = db_path
+        
+        # Only create directory if not using in-memory database
+        if db_path != ":memory:" and not db_path.startswith("file:memdb"):
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        
         self.connection = None
         self.connect()
         self.create_tables()

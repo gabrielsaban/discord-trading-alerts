@@ -299,25 +299,31 @@ def calculate_adx(df: pd.DataFrame, length: int = 14, threshold: int = 25) -> Op
 
 if __name__ == "__main__":
     from binance import fetch_market_data
-
-    df = fetch_market_data(limit=200)  # Use more data for testing
     
-    print("Data validation:", validate_data(df, 50))
+    # List of different trading pairs to test
+    pairs = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT"]
     
-    # Safe printing function to handle None returns
-    def safe_print(name, result):
-        print(f"{name}:")
-        if result is not None:
-            print(result.tail())
-        else:
-            print("Calculation returned None")
-    
-    safe_print("RSI", calculate_rsi(df))
-    safe_print("RSI (normalized)", calculate_rsi(df, normalize=True))
-    safe_print("MACD", calculate_macd(df))
-    safe_print("EMA Cross", calculate_ema_cross(df))
-    safe_print("Bollinger Bands", calculate_bollinger_bands(df))
-    safe_print("Bollinger Bands (with %B)", calculate_bollinger_bands(df, normalize=True))
-    safe_print("Volume Spikes", calculate_volume_spikes(df))
-    safe_print("Volume Spikes (Z-score)", calculate_volume_spikes(df, z_score=True))
-    safe_print("ADX", calculate_adx(df))
+    for pair in pairs:
+        print(f"\n====== Testing {pair} ======\n")
+        df = fetch_market_data(symbol=pair, limit=200)
+        
+        print(f"Data validation: {validate_data(df, 50)}")
+        print(f"Data shape: {df.shape}")
+        
+        # Safe printing function for just first/last few rows
+        def safe_print(name, result):
+            print(f"{name}:")
+            if result is not None:
+                print(f"- Shape: {result.shape}")
+                print(f"- First 2 rows: {result.head(2)}")
+                print(f"- Last 2 rows: {result.tail(2)}")
+            else:
+                print("Calculation returned None")
+        
+        # Test all indicators
+        safe_print("RSI", calculate_rsi(df))
+        safe_print("MACD", calculate_macd(df))
+        safe_print("EMA Cross", calculate_ema_cross(df))
+        safe_print("Bollinger Bands", calculate_bollinger_bands(df))
+        safe_print("Volume Spikes", calculate_volume_spikes(df))
+        safe_print("ADX", calculate_adx(df))

@@ -361,8 +361,14 @@ async def test_scheduler():
     """Test the scheduler functionality"""
     from db import DatabaseManager
     
-    # Create a test database
+    # Create a test database in memory
+    # Need to pass special parameters to avoid directory creation for in-memory DB
     test_db = DatabaseManager(":memory:")
+    
+    # Skip directory creation for in-memory database
+    test_db.db_path = ":memory:"
+    test_db.connect()
+    test_db.create_tables()
     
     # Set up a user and watchlist
     test_user_id = "test_user_123"
