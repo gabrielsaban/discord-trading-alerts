@@ -167,10 +167,18 @@ class TestDatabaseManager:
         
         # Get all active symbols
         symbols = in_memory_db.get_all_active_symbols()
-        assert len(symbols) == 3  # BTCUSDT-15m, ETHUSDT-15m, BNBUSDT-1h
+        expected_symbols = [
+            ("BTCUSDT", "15m"),
+            ("ETHUSDT", "15m"),
+            ("BNBUSDT", "1h")
+        ]
         
-        # Check if symbols are returned as tuples
-        assert any(s == ("BTCUSDT", "15m") for s in symbols)
+        # Check that all expected symbols are in the results
+        for expected in expected_symbols:
+            assert expected in symbols
+            
+        # The total count should be the number of unique symbol-interval pairs
+        assert len(symbols) == len(expected_symbols)
         
         # Get users watching a symbol
         users = in_memory_db.get_users_watching_symbol("BTCUSDT", "15m")

@@ -42,7 +42,9 @@ def sample_ohlcv_data():
     
     # Generate OHLC data
     close = base_price + trend + noise
-    open_prices = close.shift(1).fillna(close[0] - 1)
+    # Convert NumPy array to pandas Series before using shift
+    close_series = pd.Series(close)
+    open_prices = close_series.shift(1).fillna(close[0] - 1).values
     high = np.maximum(open_prices, close) + np.random.uniform(0.1, 1.0, 100)
     low = np.minimum(open_prices, close) - np.random.uniform(0.1, 1.0, 100)
     
@@ -73,12 +75,6 @@ def in_memory_db():
     
     # Create the schema
     db.create_tables()
-    
-    # Add test data
-    test_user_id = "test_user_123"
-    db.create_user(test_user_id, "Test User")
-    db.add_to_watchlist(test_user_id, "BTCUSDT", "15m")
-    db.add_to_watchlist(test_user_id, "ETHUSDT", "1h")
     
     # Return the db instance
     yield db
