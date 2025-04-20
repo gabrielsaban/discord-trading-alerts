@@ -64,7 +64,7 @@ class AlertScheduler:
         alert_callback : callable
             Function to call when alerts are triggered (user_id, list_of_alerts)
         """
-        self.db = get_db()
+        # Don't store a db reference, we'll get a fresh one in each method
         self.alert_managers: Dict[str, AlertManager] = {}  # One manager per symbol/interval
         self.scheduler = BackgroundScheduler()
         self.alert_callback = alert_callback
@@ -75,8 +75,11 @@ class AlertScheduler:
     def initialize(self):
         """Initialize the scheduler and load watched symbols"""
         with self.lock:
+            # Get a fresh db connection for this method
+            db = get_db()
+            
             # Get all active symbols from the database
-            symbols = self.db.get_all_active_symbols()
+            symbols = db.get_all_active_symbols()
             
             if not symbols:
                 logger.info("No symbols found in watchlists")
@@ -148,6 +151,9 @@ class AlertScheduler:
         
         This is the main method that runs periodically for each symbol/interval
         """
+        # We need a fresh database connection for each thread
+        db = get_db()  # This will get a new connection for this thread
+        
         with self.lock:
             # Update last run time
             self.last_run[(symbol, interval)] = datetime.now()
@@ -164,7 +170,7 @@ class AlertScheduler:
                     return
                 
                 # Get users watching this symbol
-                users = self.db.get_users_watching_symbol(symbol, interval)
+                users = db.get_users_watching_symbol(symbol, interval)
                 if not users:
                     logger.info(f"No users watching {symbol} ({interval})")
                     return
@@ -175,7 +181,7 @@ class AlertScheduler:
                 # Check alerts for each user
                 for user_id in users:
                     # Get user settings
-                    user = self.db.get_user(user_id)
+                    user = db.get_user(user_id)
                     if not user or not user.get('is_active', False):
                         continue
                     
@@ -191,7 +197,7 @@ class AlertScheduler:
                         # Record alerts in the database
                         for alert in alerts:
                             alert_type = self._extract_alert_type(alert)
-                            self.db.record_alert(user_id, symbol, interval, alert_type, alert)
+                            db.record_alert(user_id, symbol, interval, alert_type, alert)
                         
                         # Call the callback if provided
                         if self.alert_callback:
@@ -384,9 +390,6 @@ async def test_scheduler():
     
     # Create the scheduler
     scheduler = AlertScheduler(handle_alert)
-    
-    # Override the DB
-    scheduler.db = test_db
     
     # Initialize
     scheduler.initialize()

@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import json
+import threading
 from typing import List, Dict, Any, Optional, Tuple, Set
 from datetime import datetime, timedelta
 import logging
@@ -39,22 +40,38 @@ class DatabaseManager:
         if db_path != ":memory:" and not db_path.startswith("file:memdb"):
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
         
-        self.connection = None
+        # Use thread-local storage for connections
+        self.local = threading.local()
+        self.local.connection = None
+        
+        # Initial connection in the main thread
         self.connect()
         self.create_tables()
     
     def connect(self):
-        """Establish connection to the SQLite database"""
+        """Establish connection to the SQLite database in the current thread"""
         try:
-            self.connection = sqlite3.connect(self.db_path)
+            # Close existing connection if any
+            if hasattr(self.local, 'connection') and self.local.connection:
+                self.local.connection.close()
+                
+            # Create a new connection for this thread
+            self.local.connection = sqlite3.connect(self.db_path)
             # Enable foreign keys
-            self.connection.execute("PRAGMA foreign_keys = ON")
+            self.local.connection.execute("PRAGMA foreign_keys = ON")
             # Return rows as dictionaries
-            self.connection.row_factory = sqlite3.Row
-            logger.info(f"Connected to database at {self.db_path}")
+            self.local.connection.row_factory = sqlite3.Row
+            logger.info(f"Connected to database at {self.db_path} in thread {threading.get_ident()}")
         except sqlite3.Error as e:
             logger.error(f"Database connection error: {e}")
             raise
+    
+    @property
+    def connection(self):
+        """Get the connection for the current thread"""
+        if not hasattr(self.local, 'connection') or self.local.connection is None:
+            self.connect()
+        return self.local.connection
     
     def create_tables(self):
         """Create necessary database tables if they don't exist"""
@@ -111,10 +128,11 @@ class DatabaseManager:
             raise
     
     def close(self):
-        """Close the database connection"""
-        if self.connection:
-            self.connection.close()
-            logger.info("Database connection closed")
+        """Close the database connection for the current thread"""
+        if hasattr(self.local, 'connection') and self.local.connection:
+            self.local.connection.close()
+            self.local.connection = None
+            logger.info(f"Database connection closed in thread {threading.get_ident()}")
     
     # User management methods
     def create_user(self, user_id: str, username: str, discord_id: str = None) -> bool:
