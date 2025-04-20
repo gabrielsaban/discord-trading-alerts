@@ -59,11 +59,15 @@ class TradingAlertsBot(discord.Client):
         """Called when the bot has connected to Discord"""
         logger.info(f'{self.user} has connected to Discord!')
         
-        # Set up status message
+        # Load alert channels from database
+        await self.load_alert_channels()
+        
+        # Set up status message - discord.py doesn't fully support CustomActivity, use this instead
         await self.change_presence(
             activity=discord.Activity(
-                type=discord.ActivityType.watching,
-                name="/watch for trading alerts"
+                type=discord.ActivityType.custom,
+                name="📊 Tracking crypto signals",
+                state="📊 Tracking crypto signals"
             )
         )
     
@@ -94,32 +98,32 @@ class TradingAlertsBot(discord.Client):
         embed.add_field(
             name="Getting Started",
             value="Use `/watch BTCUSDT` to start monitoring Bitcoin\n"
-                  "Use `/list` to see your watched pairs\n"
-                  "Use `/settings` to customize your alerts",
+                "Use `/list` to see your watched pairs\n"
+                "Use `/settings` to customize your alerts",
             inline=False
         )
         
         embed.add_field(
             name="Available Commands",
             value="`/watch symbol [interval]` - Add a trading pair to watchlist\n"
-                  "`/unwatch symbol [interval]` - Remove a pair from watchlist\n"
-                  "`/list` - Show your watchlist\n"
-                  "`/settings` - Adjust alert thresholds\n"
-                  "`/stats` - View alert statistics",
+                "`/unwatch symbol [interval]` - Remove a pair from watchlist\n"
+                "`/list` - Show your watchlist\n"
+                "`/settings` - Adjust alert thresholds\n"
+                "`/stats` - View alert statistics",
             inline=False
         )
         
         embed.add_field(
             name="Credits",
             value="Made by [gabrielsaban](https://github.com/gabrielsaban)\n"
-                  "[View Project on GitHub](https://github.com/gabrielsaban/discord-trading-alerts)",
+                "[View Project on GitHub](https://github.com/gabrielsaban/discord-trading-alerts)",
             inline=False
         )
         
-        embed.set_footer(text="React with 📌 to pin this message for future reference")
+        #embed.set_footer(text="React with 📌 to pin this message for future reference")
         
         message = await channel.send(embed=embed)
-        await message.add_reaction("📌")  # Pin reaction
+        #await message.add_reaction("📌")  # Pin reaction
     
     async def send_alert_notification(self, user_id: str, alerts: List[str]):
         """Send alert notifications to the specified user"""
@@ -134,30 +138,55 @@ class TradingAlertsBot(discord.Client):
             logger.warning(f"User {user_id} not found in database")
             return
         
+        # Safety check to make sure we're running in an asyncio task
+        try:
+            asyncio.current_task()
+        except RuntimeError:
+            logger.warning("send_alert_notification called outside of an asyncio task context")
+            return
+        
         # Send alerts to all registered channels
         for channel in self.alert_channels[user_id]:
             try:
+                # Try to get a fresh channel reference to avoid stale references
+                current_channel = channel
+                if hasattr(self, 'get_channel'):
+                    fetched_channel = self.get_channel(channel.id)
+                    if fetched_channel is not None:
+                        current_channel = fetched_channel
+                
+                # Process each alert
                 for alert in alerts:
-                    # Extract symbol from alert message
-                    symbol = alert.split(':')[1].split()[0] if ':' in alert else "Unknown"
-                    
-                    # Create embed
-                    embed = discord.Embed(
-                        title=f"⚠️ Alert: {symbol}",
-                        description=alert,
-                        color=self._get_color_for_alert(alert)
-                    )
-                    
-                    # Add timestamp
-                    embed.timestamp = discord.utils.utcnow()
-                    
-                    # Send the embed
-                    await channel.send(embed=embed)
-                    
-                    # Small delay to avoid rate limiting
-                    await asyncio.sleep(0.5)
+                    try:
+                        # Extract symbol from alert message
+                        symbol = alert.split(':')[1].split()[0] if ':' in alert else "Unknown"
+                        
+                        # Create embed
+                        embed = discord.Embed(
+                            title=f"⚠️ Alert: {symbol}",
+                            description=alert,
+                            color=self._get_color_for_alert(alert)
+                        )
+                        
+                        # Add timestamp
+                        embed.timestamp = discord.utils.utcnow()
+                        
+                        # Simple direct send without any nested coroutines or tasks
+                        try:
+                            await current_channel.send(embed=embed)
+                            logger.info(f"Sent alert for {symbol} to channel {current_channel.id}")
+                        except Exception as e:
+                            logger.error(f"Failed to send alert to channel {current_channel.id}: {e}")
+                        
+                        # Add a small delay between alerts to avoid rate limiting
+                        await asyncio.sleep(1.0)
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing alert for channel {current_channel.id}: {e}")
             except Exception as e:
-                logger.error(f"Error sending alert to channel {channel.id}: {e}")
+                logger.error(f"Error accessing channel for user {user_id}: {e}")
+                import traceback
+                logger.error(f"Alert error details: {traceback.format_exc()}")
     
     def _get_color_for_alert(self, alert: str) -> discord.Color:
         """Get the appropriate color for an alert based on its type"""
@@ -169,6 +198,56 @@ class TradingAlertsBot(discord.Client):
             return discord.Color.gold()
         else:
             return discord.Color.blue()
+        
+    async def load_alert_channels(self):
+        """Load alert channels from the database"""
+        try:
+            # Clear existing channels
+            self.alert_channels = {}
+            
+            # Get all active symbols to find their users
+            active_symbols = self.db.get_all_active_symbols()
+            unique_users = set()
+            
+            for symbol, interval in active_symbols:
+                users = self.db.get_users_watching_symbol(symbol, interval)
+                unique_users.update(users)
+            
+            # Load channels for each user
+            for user_id in unique_users:
+                channels_data = self.db.get_user_alert_channels(user_id)
+                
+                if not channels_data:
+                    logger.warning(f"No alert channels found for user {user_id}")
+                    continue
+                
+                self.alert_channels[user_id] = []
+                
+                for channel_data in channels_data:
+                    channel_id = int(channel_data['channel_id'])
+                    guild_id = int(channel_data['guild_id'])
+                    
+                    # Try to get the guild
+                    guild = self.get_guild(guild_id)
+                    if not guild:
+                        logger.warning(f"Guild {guild_id} not found for user {user_id}")
+                        continue
+                    
+                    # Try to get the channel
+                    channel = guild.get_channel(channel_id)
+                    if not channel:
+                        logger.warning(f"Channel {channel_id} not found in guild {guild_id}")
+                        continue
+                    
+                    # Add channel to user's alert channels
+                    self.alert_channels[user_id].append(channel)
+                    logger.info(f"Loaded alert channel {channel_id} for user {user_id}")
+                
+            logger.info(f"Loaded alert channels for {len(self.alert_channels)} users")
+        except Exception as e:
+            logger.error(f"Error loading alert channels: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def register_channel(self, user_id: str, channel: discord.TextChannel):
         """Register a channel for a user's alerts"""
@@ -177,12 +256,16 @@ class TradingAlertsBot(discord.Client):
         
         if channel not in self.alert_channels[user_id]:
             self.alert_channels[user_id].append(channel)
+            # Also save to database
+            self.db.register_alert_channel(user_id, str(channel.id), str(channel.guild.id))
             logger.info(f"Registered channel {channel.id} for user {user_id}")
     
     def unregister_channel(self, user_id: str, channel: discord.TextChannel):
         """Unregister a channel for a user's alerts"""
         if user_id in self.alert_channels and channel in self.alert_channels[user_id]:
             self.alert_channels[user_id].remove(channel)
+            # Also remove from database
+            self.db.unregister_alert_channel(user_id, str(channel.id))
             logger.info(f"Unregistered channel {channel.id} for user {user_id}")
 
 
@@ -247,6 +330,13 @@ async def watch_command(
     if not user:
         bot.db.create_user(user_id, interaction.user.display_name, interaction.user.id)
     
+    # Check if symbol is already in watchlist
+    watchlist = bot.db.get_user_watchlist(user_id)
+    already_watching = any(
+        w['symbol'] == symbol and w['interval'] == interval 
+        for w in watchlist
+    )
+    
     # Add to watchlist
     success = bot.db.add_to_watchlist(user_id, symbol, interval)
     
@@ -259,13 +349,19 @@ async def watch_command(
         bot.scheduler.add_symbol(symbol, interval)
         
         # Notify user
-        await interaction.followup.send(
-            f"🔔 Added {symbol} ({interval}) to your watchlist. Alerts will be sent to {alert_channel.mention}.",
-            ephemeral=True
-        )
+        if already_watching:
+            await interaction.followup.send(
+                f"✅ You're already watching {symbol} ({interval}). Updated alert channel to {alert_channel.mention}.",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(
+                f"🔔 Added {symbol} ({interval}) to your watchlist. Alerts will be sent to {alert_channel.mention}.",
+                ephemeral=True
+            )
     else:
         await interaction.followup.send(
-            f"Failed to add {symbol} to your watchlist. It may already be in your watchlist.",
+            f"Failed to add {symbol} to your watchlist. Please try again later.",
             ephemeral=True
         )
 
@@ -422,28 +518,28 @@ async def settings_command(
         embed.add_field(
             name="RSI Thresholds",
             value=f"Oversold: {settings.get('rsi_oversold', 30)}\n"
-                  f"Overbought: {settings.get('rsi_overbought', 70)}",
+                f"Overbought: {settings.get('rsi_overbought', 70)}",
             inline=True
         )
         
         embed.add_field(
             name="EMA Periods",
             value=f"Short: {settings.get('ema_short', 9)}\n"
-                  f"Long: {settings.get('ema_long', 21)}",
+                f"Long: {settings.get('ema_long', 21)}",
             inline=True
         )
         
         embed.add_field(
             name="Volume & Bollinger",
             value=f"Volume Threshold: {settings.get('volume_threshold', 2.5)}\n"
-                  f"BB Squeeze: {settings.get('bb_squeeze_threshold', 0.05)}",
+                f"BB Squeeze: {settings.get('bb_squeeze_threshold', 0.05)}",
             inline=True
         )
         
         embed.add_field(
             name="Trend & Timing",
             value=f"ADX Threshold: {settings.get('adx_threshold', 25)}\n"
-                  f"Cooldown: {settings.get('cooldown_minutes', 240)} minutes",
+                f"Cooldown: {settings.get('cooldown_minutes', 240)} minutes",
             inline=True
         )
         

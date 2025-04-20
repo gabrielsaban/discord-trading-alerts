@@ -2,7 +2,7 @@ import time
 import threading
 import logging
 import asyncio
-from typing import Dict, List, Tuple, Callable, Any, Optional
+from typing import Dict, List, Tuple, Callable, Any, Optional, Union, Coroutine
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.base import JobLookupError
@@ -55,14 +55,14 @@ DEFAULT_CANDLE_LIMITS = {
 class AlertScheduler:
     """Scheduler for periodically checking trading alerts"""
     
-    def __init__(self, alert_callback: Callable[[str, List[str]], None] = None):
+    def __init__(self, alert_callback: Union[Callable[[str, List[str]], None], Callable[[str, List[str]], Coroutine[Any, Any, None]]] = None):
         """
         Initialize the alert scheduler
         
         Parameters:
         -----------
-        alert_callback : callable
-            Function to call when alerts are triggered (user_id, list_of_alerts)
+        alert_callback : callable or coroutine
+            Function or coroutine to call when alerts are triggered (user_id, list_of_alerts)
         """
         # Don't store a db reference, we'll get a fresh one in each method
         self.user_alert_managers: Dict[str, Dict[str, AlertManager]] = {}  # user_id -> {symbol_interval -> AlertManager}
@@ -72,10 +72,18 @@ class AlertScheduler:
         self.last_run: Dict[Tuple[str, str], datetime] = {}  # (symbol, interval) -> last run time
         self.lock = threading.RLock()  # For thread safety
         self.scheduled_symbols = set()  # Track which symbols are scheduled
+        
+        # Create event loop for running async callbacks
+        self.loop = asyncio.new_event_loop()
+        self.loop_thread = None
     
     def initialize(self):
         """Initialize the scheduler and load watched symbols"""
         with self.lock:
+            # Start event loop thread if alert_callback is async
+            if self.alert_callback and asyncio.iscoroutinefunction(self.alert_callback):
+                self._start_event_loop()
+            
             # Get a fresh db connection for this method
             db = get_db()
             
@@ -95,6 +103,59 @@ class AlertScheduler:
                 self.scheduler.start()
                 self.running = True
                 logger.info("Alert scheduler started")
+    
+    def _start_event_loop(self):
+        """Start a background thread with an event loop for async callbacks"""
+        if self.loop_thread is not None and self.loop_thread.is_alive():
+            logger.debug("Event loop thread already running")
+            return
+        
+        def run_event_loop():
+            asyncio.set_event_loop(self.loop)
+            self.loop.run_forever()
+        
+        self.loop_thread = threading.Thread(target=run_event_loop, daemon=True)
+        self.loop_thread.start()
+        logger.info("Started event loop thread for async callbacks")
+    
+    def _run_callback(self, user_id: str, alerts: List[str]):
+        """Run the callback, handling both synchronous and asynchronous callbacks"""
+        if not self.alert_callback:
+            return
+        
+        try:
+            if asyncio.iscoroutinefunction(self.alert_callback):
+                # Import the bot instance to get its event loop
+                # This is important for Discord.py's timeouts to work correctly
+                from bot.discord_bot import bot
+                if bot and hasattr(bot, 'loop') and bot.loop:
+                    discord_loop = bot.loop
+                    # Schedule the coroutine to run on Discord.py's event loop
+                    asyncio.run_coroutine_threadsafe(
+                        self.alert_callback(user_id, alerts),
+                        discord_loop
+                    )
+                    logger.debug(f"Scheduled alert callback on Discord's event loop for user {user_id}")
+                else:
+                    # Fallback to our own loop if bot's loop is not available
+                    if self.loop_thread is None or not self.loop_thread.is_alive():
+                        logger.warning("Event loop thread not running, starting now")
+                        self._start_event_loop()
+                    
+                    # Schedule it to run in our event loop
+                    asyncio.run_coroutine_threadsafe(
+                        self.alert_callback(user_id, alerts),
+                        self.loop
+                    )
+                    logger.debug(f"Scheduled alert callback on scheduler's loop for user {user_id}")
+            else:
+                # For synchronous callbacks, just call directly
+                self.alert_callback(user_id, alerts)
+        except Exception as e:
+            logger.error(f"Error in alert callback: {e}")
+            # Log the full traceback
+            import traceback
+            logger.error(traceback.format_exc())
     
     def get_user_alert_manager(self, user_id: str, symbol: str, interval: str) -> AlertManager:
         """Get or create an alert manager for a specific user, symbol, and interval"""
@@ -204,11 +265,7 @@ class AlertScheduler:
                             db.record_alert(user_id, symbol, interval, alert_type, alert)
                         
                         # Call the callback if provided
-                        if self.alert_callback:
-                            try:
-                                self.alert_callback(user_id, alerts)
-                            except Exception as e:
-                                logger.error(f"Error in alert callback: {e}")
+                        self._run_callback(user_id, alerts)
             
             except Exception as e:
                 logger.error(f"Error checking alerts for {symbol} ({interval}): {e}")
@@ -374,6 +431,18 @@ class AlertScheduler:
                     
                     # Shutdown the scheduler
                     self.scheduler.shutdown(wait=False)
+                    
+                    # Stop the event loop if it's running
+                    if self.loop and self.loop.is_running():
+                        logger.info("Stopping event loop...")
+                        # Schedule a callback to stop the loop
+                        self.loop.call_soon_threadsafe(self.loop.stop)
+                        
+                        # Wait for the thread to finish if it exists
+                        if self.loop_thread and self.loop_thread.is_alive():
+                            self.loop_thread.join(timeout=2.0)
+                            if self.loop_thread.is_alive():
+                                logger.warning("Event loop thread did not terminate in time")
                     
                     # Clear internal data structures
                     self.user_alert_managers.clear()

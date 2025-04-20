@@ -120,6 +120,19 @@ class DatabaseManager:
             )
             ''')
             
+            # Alert channels table
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS alert_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                guild_id TEXT NOT NULL,
+                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, channel_id),
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+            ''')
+            
             self.connection.commit()
             logger.info("Database tables created/verified")
         except sqlite3.Error as e:
@@ -534,6 +547,58 @@ class DatabaseManager:
                 'alerts_by_day': {},
                 'total_alerts': 0
             }
+    
+    def register_alert_channel(self, user_id: str, channel_id: str, guild_id: str) -> bool:
+        """Register a channel for a user's alerts in the database"""
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute(
+                "INSERT OR IGNORE INTO alert_channels (user_id, channel_id, guild_id) VALUES (?, ?, ?)",
+                (user_id, channel_id, guild_id)
+            )
+            
+            self.connection.commit()
+            logger.info(f"Registered channel {channel_id} for user {user_id} in database")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error registering channel for user {user_id}: {e}")
+            self.connection.rollback()
+            return False
+    
+    def unregister_alert_channel(self, user_id: str, channel_id: str) -> bool:
+        """Unregister a channel for a user's alerts"""
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute(
+                "DELETE FROM alert_channels WHERE user_id = ? AND channel_id = ?",
+                (user_id, channel_id)
+            )
+            
+            self.connection.commit()
+            logger.info(f"Unregistered channel {channel_id} for user {user_id} from database")
+            return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            logger.error(f"Error unregistering channel for user {user_id}: {e}")
+            self.connection.rollback()
+            return False
+    
+    def get_user_alert_channels(self, user_id: str) -> List[Dict[str, Any]]:
+        """Get all registered alert channels for a user"""
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute(
+                "SELECT * FROM alert_channels WHERE user_id = ?",
+                (user_id,)
+            )
+            
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting alert channels for user {user_id}: {e}")
+            return []
 
 
 # Singleton instance
