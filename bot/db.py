@@ -18,7 +18,7 @@ DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'aler
 DEFAULT_ALERT_SETTINGS = {
     "rsi_oversold": 30,
     "rsi_overbought": 70,
-    "volume_threshold": 2.5,
+    "volume_threshold": 2.0,
     "ema_short": 9,
     "ema_long": 21,
     "bb_squeeze_threshold": 0.05,
