@@ -20,6 +20,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("trading_alerts")
 
+# Set DEBUG level specifically for the alerts module
+logging.getLogger("bot.alerts").setLevel(logging.DEBUG)
+
 # Ensure data directory exists
 os.makedirs("data", exist_ok=True)
 

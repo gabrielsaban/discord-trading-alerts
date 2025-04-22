@@ -642,8 +642,14 @@ class AlertManager:
         else:
             cooldown_key = f"{symbol}_{alert_type}"
 
+        # Log cooldown check attempt - this should always show up
+        logger.info(
+            f"Checking cooldown for {cooldown_key} (Interval: {interval or 'unknown'})"
+        )
+
         # If this alert type has never been triggered, it's not in cooldown
         if cooldown_key not in AlertManager.global_cooldowns:
+            logger.info(f"No previous cooldown found for {cooldown_key}")
             return True
 
         # Calculate signal strength for the current alert
@@ -655,52 +661,67 @@ class AlertManager:
 
         # Get cooldown info for this alert
         cooldown_info = AlertManager.global_cooldowns[cooldown_key]
+
+        # Log the cooldown info to debug dictionary structure
+        logger.info(f"Cooldown info for {cooldown_key}: {cooldown_info}")
+
+        # Extract data from cooldown_info dictionary
         last_triggered = cooldown_info.get("timestamp")
         last_interval = cooldown_info.get("interval", "unknown")
         last_strength = cooldown_info.get("strength", 5.0)
 
         # Determine cooldown period based on last triggered interval
-        # Higher strength in current signal may override cooldown
         cooldown_minutes = self.timeframe_cooldowns.get(
             last_interval, self.default_cooldown_minutes
         )
         cooldown_period = timedelta(minutes=cooldown_minutes)
 
+        logger.info(
+            f"Using {cooldown_minutes} minute cooldown for {last_interval} timeframe"
+        )
+
         # Check if cooldown period has passed
-        if now - last_triggered < cooldown_period:
+        time_since_last = now - last_triggered
+        if time_since_last < cooldown_period:
             # Still in cooldown, but check for strength override
             minutes_remaining = int(
-                (cooldown_period - (now - last_triggered)).total_seconds() / 60
+                (cooldown_period - time_since_last).total_seconds() / 60
             )
 
             # Calculate how much of the cooldown has passed (as a ratio)
             cooldown_progress = (
-                now - last_triggered
-            ).total_seconds() / cooldown_period.total_seconds()
+                time_since_last.total_seconds() / cooldown_period.total_seconds()
+            )
+
+            logger.info(
+                f"{cooldown_key} is in cooldown: {minutes_remaining} minutes remaining. "
+                f"Current strength: {current_strength:.1f}, Previous: {last_strength:.1f}, "
+                f"Progress: {cooldown_progress:.1%}"
+            )
 
             # Strong signals can override cooldown if:
             # 1. Current signal is significantly stronger than the previous one
             # 2. At least 30% of cooldown period has passed
             # 3. Signal is above the override strength threshold
             if (
-                current_strength > last_strength + 2.0
-                and cooldown_progress > 0.3  # Significantly stronger
-                and current_strength  # At least 30% of cooldown has passed
-                >= self.override_strength_threshold
-            ):  # Strong enough to override
+                current_strength > last_strength + 2.0  # Significantly stronger
+                and cooldown_progress > 0.3  # At least 30% of cooldown has passed
+                and current_strength
+                >= self.override_strength_threshold  # Strong enough to override
+            ):
                 logger.info(
                     f"Strong signal ({current_strength:.1f}) overriding cooldown for {cooldown_key}. "
                     f"Previous strength: {last_strength:.1f}, Cooldown progress: {cooldown_progress:.1%}"
                 )
                 return True
 
-            logger.debug(
-                f"{cooldown_key} in GLOBAL cooldown ({minutes_remaining} minutes remaining). "
-                f"Current strength: {current_strength:.1f}, Previous: {last_strength:.1f}"
-            )
+            # Not overriding, remain in cooldown
             return False
 
         # Cooldown period has passed
+        logger.info(
+            f"Cooldown passed for {cooldown_key} (elapsed: {time_since_last.total_seconds()/60:.1f} minutes)"
+        )
         return True
 
     def _update_global_cooldown(
@@ -741,16 +762,20 @@ class AlertManager:
             )
 
         # Update the shared class variable with current time, interval and strength
-        AlertManager.global_cooldowns[cooldown_key] = {
+        cooldown_data = {
             "timestamp": datetime.now(),
             "interval": interval or "unknown",
             "strength": strength,
         }
 
-        logger.debug(
-            f"Updated global cooldown for {cooldown_key} "
-            f"(Interval: {interval}, Strength: {strength:.1f})"
+        # Store the cooldown information
+        AlertManager.global_cooldowns[cooldown_key] = cooldown_data
+
+        # Always log at INFO level for debugging
+        logger.info(
+            f"Set cooldown for {cooldown_key}: Interval={interval}, Strength={strength:.1f}"
         )
+        logger.info(f"Cooldown data: {cooldown_data}")
 
     def check_alerts(
         self, symbol: str, df: pd.DataFrame, interval: str = None
@@ -853,8 +878,8 @@ if __name__ == "__main__":
         # Fetch data
         df = fetch_market_data(symbol=symbol, interval=interval, limit=limit)
 
-        # Check alerts
-        alerts = manager.check_alerts(symbol, df)
+        # Check alerts - pass the interval parameter
+        alerts = manager.check_alerts(symbol, df, interval)
 
         if alerts:
             print(f"\nTriggered alerts for {symbol}:")
