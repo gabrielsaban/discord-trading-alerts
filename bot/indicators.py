@@ -5,20 +5,20 @@ import logging
 from typing import Optional
 
 # Setup logging
-logger = logging.getLogger('trading_alerts.indicators')
+logger = logging.getLogger("trading_alerts.indicators")
 
 
 def validate_data(df: pd.DataFrame, min_periods: int) -> bool:
     """
     Validate that dataframe has enough data points for calculation
-    
+
     Parameters:
     -----------
     df : pd.DataFrame
         Dataframe with OHLCV data
     min_periods : int
         Minimum number of periods required for calculation
-        
+
     Returns:
     --------
     bool
@@ -26,26 +26,28 @@ def validate_data(df: pd.DataFrame, min_periods: int) -> bool:
     """
     if df is None or df.empty:
         return False
-    
+
     if len(df) < min_periods:
         return False
-        
+
     # Check for required columns
-    required_cols = ['open', 'high', 'low', 'close', 'volume']
+    required_cols = ["open", "high", "low", "close", "volume"]
     if not all(col in df.columns for col in required_cols):
         return False
-        
+
     # Check for NaN values in close price
-    if df['close'].isna().any():
+    if df["close"].isna().any():
         return False
-        
+
     return True
 
 
-def calculate_rsi(df: pd.DataFrame, length: int = 14, normalize: bool = False) -> Optional[pd.Series]:
+def calculate_rsi(
+    df: pd.DataFrame, length: int = 14, normalize: bool = False
+) -> Optional[pd.Series]:
     """
     Calculate the Relative Strength Index (RSI) for the given dataframe
-    
+
     Parameters:
     -----------
     df : pd.DataFrame
@@ -54,7 +56,7 @@ def calculate_rsi(df: pd.DataFrame, length: int = 14, normalize: bool = False) -
         RSI period length
     normalize : bool
         If True, normalize values to 0-1 range instead of 0-100
-        
+
     Returns:
     --------
     pd.Series or None
@@ -63,27 +65,31 @@ def calculate_rsi(df: pd.DataFrame, length: int = 14, normalize: bool = False) -
     try:
         # For testing purposes, allow shorter datasets but adjust the length
         if df is not None and not df.empty and len(df) < length + 1:
-            logger.warning(f"RSI calculation: Using adjusted length {len(df)-1} instead of {length} due to limited data")
+            logger.warning(
+                f"RSI calculation: Using adjusted length {len(df)-1} instead of {length} due to limited data"
+            )
             length = max(2, len(df) - 1)  # Ensure at least 2 periods
-            
+
         if not validate_data(df, length + 1):
             return None
-            
-        rsi = ta.rsi(df['close'], length=length)
-        
+
+        rsi = ta.rsi(df["close"], length=length)
+
         if normalize:
             rsi = rsi / 100.0
-            
+
         return rsi
     except Exception as e:
         logger.error(f"Error calculating RSI: {e}")
         return None
 
 
-def calculate_macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> Optional[pd.DataFrame]:
+def calculate_macd(
+    df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9
+) -> Optional[pd.DataFrame]:
     """
     Calculate the Moving Average Convergence Divergence (MACD) components
-    
+
     Parameters:
     -----------
     df : pd.DataFrame
@@ -94,7 +100,7 @@ def calculate_macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int
         Slow EMA period
     signal : int
         Signal line period
-        
+
     Returns:
     --------
     pd.DataFrame or None
@@ -102,20 +108,22 @@ def calculate_macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int
     """
     try:
         min_periods = max(fast, slow, signal) + signal
-        
+
         # For testing purposes, allow smaller datasets but adjust the parameters
         if df is not None and not df.empty and len(df) < min_periods:
-            logger.warning(f"MACD calculation: Using adjusted parameters due to limited data (length={len(df)})")
+            logger.warning(
+                f"MACD calculation: Using adjusted parameters due to limited data (length={len(df)})"
+            )
             available_periods = max(3, len(df) - 1)
             fast = min(fast, max(2, available_periods // 4))
             slow = min(slow, max(3, available_periods // 2))
             signal = min(signal, max(2, available_periods // 3))
             min_periods = max(fast, slow, signal) + signal
-            
+
         if not validate_data(df, min_periods):
             return None
-            
-        macd_df = ta.macd(df['close'], fast=fast, slow=slow, signal=signal)
+
+        macd_df = ta.macd(df["close"], fast=fast, slow=slow, signal=signal)
         col_map = {
             f"MACD_{fast}_{slow}_{signal}": "MACD",
             f"MACDs_{fast}_{slow}_{signal}": "Signal",
@@ -127,10 +135,12 @@ def calculate_macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int
         return None
 
 
-def calculate_ema_cross(df: pd.DataFrame, short: int = 9, long: int = 21) -> Optional[pd.DataFrame]:
+def calculate_ema_cross(
+    df: pd.DataFrame, short: int = 9, long: int = 21
+) -> Optional[pd.DataFrame]:
     """
     Calculate EMA values for short and long periods for crossover analysis
-    
+
     Parameters:
     -----------
     df : pd.DataFrame
@@ -139,7 +149,7 @@ def calculate_ema_cross(df: pd.DataFrame, short: int = 9, long: int = 21) -> Opt
         Short EMA period
     long : int
         Long EMA period
-        
+
     Returns:
     --------
     pd.DataFrame or None
@@ -149,26 +159,32 @@ def calculate_ema_cross(df: pd.DataFrame, short: int = 9, long: int = 21) -> Opt
         min_periods = long * 3  # For EMA stability
         if not validate_data(df, min_periods):
             return None
-            
-        ema_short = df['close'].ewm(span=short, adjust=False).mean()
-        ema_long = df['close'].ewm(span=long, adjust=False).mean()
-        
+
+        ema_short = df["close"].ewm(span=short, adjust=False).mean()
+        ema_long = df["close"].ewm(span=long, adjust=False).mean()
+
         result = pd.DataFrame({f"EMA{short}": ema_short, f"EMA{long}": ema_long})
-        
+
         # Add crossover signals
-        result['Cross_Up'] = (ema_short > ema_long) & (ema_short.shift(1) <= ema_long.shift(1))
-        result['Cross_Down'] = (ema_short < ema_long) & (ema_short.shift(1) >= ema_long.shift(1))
-        
+        result["Cross_Up"] = (ema_short > ema_long) & (
+            ema_short.shift(1) <= ema_long.shift(1)
+        )
+        result["Cross_Down"] = (ema_short < ema_long) & (
+            ema_short.shift(1) >= ema_long.shift(1)
+        )
+
         return result
     except Exception as e:
         logger.error(f"Error calculating EMA cross: {e}")
         return None
 
 
-def calculate_bollinger_bands(df: pd.DataFrame, length: int = 20, std: float = 2, normalize: bool = False) -> Optional[pd.DataFrame]:
+def calculate_bollinger_bands(
+    df: pd.DataFrame, length: int = 20, std: float = 2, normalize: bool = False
+) -> Optional[pd.DataFrame]:
     """
     Calculate Bollinger Bands (lower, middle, upper)
-    
+
     Parameters:
     -----------
     df : pd.DataFrame
@@ -179,7 +195,7 @@ def calculate_bollinger_bands(df: pd.DataFrame, length: int = 20, std: float = 2
         Number of standard deviations
     normalize : bool
         If True, normalize to percent B (0-1 range)
-        
+
     Returns:
     --------
     pd.DataFrame or None
@@ -189,64 +205,70 @@ def calculate_bollinger_bands(df: pd.DataFrame, length: int = 20, std: float = 2
     try:
         # For testing purposes, allow smaller datasets but adjust the parameters
         if df is not None and not df.empty and len(df) < length:
-            logger.warning(f"Bollinger Bands calculation: Using adjusted length {len(df)} instead of {length} due to limited data")
+            logger.warning(
+                f"Bollinger Bands calculation: Using adjusted length {len(df)} instead of {length} due to limited data"
+            )
             length = max(2, len(df) - 1)  # Ensure at least 2 periods
-            
+
         if not validate_data(df, length):
             return None
-            
+
         # Get the Bollinger Bands - this produces different column names than we expected
-        bb = ta.bbands(df['close'], length=length, std=std)
+        bb = ta.bbands(df["close"], length=length, std=std)
         if bb is None or bb.empty:
             logger.error("pandas-ta bbands returned None or empty dataframe")
             return None
 
         # Create a new result dataframe with our standard column names
         result = pd.DataFrame()
-        
+
         # Map the actual column names from pandas-ta to our standard names
         # The .0 is present when std is passed as float (2.0 instead of 2)
-        if f'BBL_{length}_{std}.0' in bb.columns:
-            result['BBL'] = bb[f'BBL_{length}_{std}.0']
-            result['BBM'] = bb[f'BBM_{length}_{std}.0']
-            result['BBU'] = bb[f'BBU_{length}_{std}.0']
+        if f"BBL_{length}_{std}.0" in bb.columns:
+            result["BBL"] = bb[f"BBL_{length}_{std}.0"]
+            result["BBM"] = bb[f"BBM_{length}_{std}.0"]
+            result["BBU"] = bb[f"BBU_{length}_{std}.0"]
         else:
-            result['BBL'] = bb[f'BBL_{length}_{std}']
-            result['BBM'] = bb[f'BBM_{length}_{std}']
-            result['BBU'] = bb[f'BBU_{length}_{std}']
-        
+            result["BBL"] = bb[f"BBL_{length}_{std}"]
+            result["BBM"] = bb[f"BBM_{length}_{std}"]
+            result["BBU"] = bb[f"BBU_{length}_{std}"]
+
         # Ensure lower band <= middle band <= upper band
         # Handle any potential calculation errors or edge cases
         valid_rows = result.notna().all(axis=1)
         if not valid_rows.all():
             # Drop NaN rows for proper calculation
             result = result.loc[valid_rows]
-            
+
         # Calculate bandwidth only for valid rows
-        result['BandWidth'] = (result['BBU'] - result['BBL']) / result['BBM']
-        
+        result["BandWidth"] = (result["BBU"] - result["BBL"]) / result["BBM"]
+
         if normalize:
             # Use the existing PercentB if available, otherwise calculate
-            if f'BBP_{length}_{std}.0' in bb.columns:
-                result['PercentB'] = bb[f'BBP_{length}_{std}.0']
-            elif f'BBP_{length}_{std}' in bb.columns:
-                result['PercentB'] = bb[f'BBP_{length}_{std}']
+            if f"BBP_{length}_{std}.0" in bb.columns:
+                result["PercentB"] = bb[f"BBP_{length}_{std}.0"]
+            elif f"BBP_{length}_{std}" in bb.columns:
+                result["PercentB"] = bb[f"BBP_{length}_{std}"]
             else:
                 # Calculate %B manually if pandas-ta doesn't provide it
-                result['PercentB'] = (df['close'] - result['BBL']) / (result['BBU'] - result['BBL'])
+                result["PercentB"] = (df["close"] - result["BBL"]) / (
+                    result["BBU"] - result["BBL"]
+                )
                 # Clip to handle values outside bands
-                result['PercentB'] = result['PercentB'].clip(0, 1)
-            
+                result["PercentB"] = result["PercentB"].clip(0, 1)
+
         return result
     except Exception as e:
         logger.error(f"Error calculating Bollinger Bands: {e}")
         return None
 
 
-def calculate_volume_spikes(df: pd.DataFrame, length: int = 20, threshold: float = 2, z_score: bool = False) -> Optional[pd.DataFrame]:
+def calculate_volume_spikes(
+    df: pd.DataFrame, length: int = 20, threshold: float = 2, z_score: bool = False
+) -> Optional[pd.DataFrame]:
     """
     Identify volume spikes based on rolling average volume
-    
+
     Parameters:
     -----------
     df : pd.DataFrame
@@ -257,7 +279,7 @@ def calculate_volume_spikes(df: pd.DataFrame, length: int = 20, threshold: float
         Ratio threshold for spike detection
     z_score : bool
         If True, calculate z-score of volume instead of simple ratio
-        
+
     Returns:
     --------
     pd.DataFrame or None
@@ -266,31 +288,33 @@ def calculate_volume_spikes(df: pd.DataFrame, length: int = 20, threshold: float
     try:
         if not validate_data(df, length):
             return None
-            
+
         result = pd.DataFrame()
-        result['volume'] = df['volume']
-        result['avg_volume'] = df['volume'].rolling(window=length).mean()
-        
+        result["volume"] = df["volume"]
+        result["avg_volume"] = df["volume"].rolling(window=length).mean()
+
         if z_score:
             # Calculate Z-score (how many standard deviations from mean)
-            vol_std = df['volume'].rolling(window=length).std()
-            result['z_score'] = (df['volume'] - result['avg_volume']) / vol_std
-            result['spike'] = result['z_score'] > threshold
+            vol_std = df["volume"].rolling(window=length).std()
+            result["z_score"] = (df["volume"] - result["avg_volume"]) / vol_std
+            result["spike"] = result["z_score"] > threshold
         else:
             # Simple ratio method
-            result['volume_ratio'] = df['volume'] / result['avg_volume']
-            result['spike'] = result['volume_ratio'] > threshold
-            
+            result["volume_ratio"] = df["volume"] / result["avg_volume"]
+            result["spike"] = result["volume_ratio"] > threshold
+
         return result
     except Exception as e:
         logger.error(f"Error calculating volume spikes: {e}")
         return None
 
 
-def calculate_adx(df: pd.DataFrame, length: int = 14, threshold: int = 25) -> Optional[pd.DataFrame]:
+def calculate_adx(
+    df: pd.DataFrame, length: int = 14, threshold: int = 25
+) -> Optional[pd.DataFrame]:
     """
     Calculate Average Directional Index (ADX) and Directional Indicators (DI+ and DI-)
-    
+
     Parameters:
     -----------
     df : pd.DataFrame
@@ -299,7 +323,7 @@ def calculate_adx(df: pd.DataFrame, length: int = 14, threshold: int = 25) -> Op
         ADX period length
     threshold : int
         ADX threshold for trend strength (typically 25)
-        
+
     Returns:
     --------
     pd.DataFrame or None
@@ -309,19 +333,19 @@ def calculate_adx(df: pd.DataFrame, length: int = 14, threshold: int = 25) -> Op
         min_periods = length * 2  # ADX needs more data for accuracy
         if not validate_data(df, min_periods):
             return None
-            
-        adx_df = ta.adx(df['high'], df['low'], df['close'], length=length)
+
+        adx_df = ta.adx(df["high"], df["low"], df["close"], length=length)
         col_map = {
             f"ADX_{length}": "ADX",
             f"DMP_{length}": "DI+",
-            f"DMN_{length}": "DI-"
+            f"DMN_{length}": "DI-",
         }
         adx_df = adx_df.rename(columns=col_map)
-        
+
         # Add trend direction and strength
-        adx_df['Trend'] = np.where(adx_df['DI+'] > adx_df['DI-'], 'Bullish', 'Bearish')
-        adx_df['Strength'] = adx_df['ADX'] > threshold
-        
+        adx_df["Trend"] = np.where(adx_df["DI+"] > adx_df["DI-"], "Bullish", "Bearish")
+        adx_df["Strength"] = adx_df["ADX"] > threshold
+
         return adx_df
     except Exception as e:
         logger.error(f"Error calculating ADX: {e}")
@@ -330,17 +354,17 @@ def calculate_adx(df: pd.DataFrame, length: int = 14, threshold: int = 25) -> Op
 
 if __name__ == "__main__":
     from binance import fetch_market_data
-    
+
     # List of different trading pairs to test
     pairs = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT"]
-    
+
     for pair in pairs:
         logger.info(f"\n====== Testing {pair} ======\n")
         df = fetch_market_data(symbol=pair, limit=200)
-        
+
         logger.info(f"Data validation: {validate_data(df, 50)}")
         logger.info(f"Data shape: {df.shape}")
-        
+
         # Safe printing function for just first/last few rows
         def safe_print(name, result):
             logger.info(f"{name}:")
@@ -350,7 +374,7 @@ if __name__ == "__main__":
                 logger.info(f"- Last 2 rows: {result.tail(2)}")
             else:
                 logger.info("Calculation returned None")
-        
+
         # Test all indicators
         safe_print("RSI", calculate_rsi(df))
         safe_print("MACD", calculate_macd(df))
