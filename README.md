@@ -64,7 +64,6 @@ DISCORD_BOT_TOKEN=your_discord_token
 ```bash
 python main.py
 ```
-
 ---
 
 ## ⚙️ Commands
