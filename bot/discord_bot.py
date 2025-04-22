@@ -124,43 +124,124 @@ class TradingAlertsBot(discord.Client):
         if user.id == self.user.id:
             return
 
+        # Handle different reactions on our alert messages
+        if (
+            reaction.message.id in self.alert_messages
+            and reaction.message.author.id == self.user.id
+        ):
+            # Checkmark reaction - delete the message
+            if reaction.emoji == "✅":
+                # Check if the user is mentioned in the alert
+                # Only allow the user who received the alert to delete it
+                if f"<@{user.id}>" in reaction.message.embeds[0].description:
+                    try:
+                        await reaction.message.delete()
+                        logger.info(
+                            f"Deleted alert message {reaction.message.id} by user request"
+                        )
+                        # Remove from tracked messages
+                        if reaction.message.id in self.alert_messages:
+                            del self.alert_messages[reaction.message.id]
+                    except Exception as e:
+                        logger.error(f"Error deleting message: {e}")
+
+            # Question mark reaction - add explanation
+            elif reaction.emoji == "❓":
+                alert_type = self.alert_messages[reaction.message.id]
+
+                # Get the original embed
+                embed = reaction.message.embeds[0] if reaction.message.embeds else None
+
+                if not embed:
+                    return
+
+                # Check if we already added the explanation (to avoid adding it multiple times)
+                if any(field.name == "Explanation" for field in embed.fields):
+                    return
+
+                # Find matching explanation
+                explanation = None
+                for key, value in ALERT_EXPLANATIONS.items():
+                    if key in alert_type:
+                        explanation = value
+                        break
+
+                if not explanation:
+                    explanation = "This alert suggests a potential trading opportunity. For more details on technical analysis, please research the specific indicator mentioned."
+
+                # Add explanation field
+                embed.add_field(name="Explanation", value=explanation, inline=False)
+
+                # Update the message
+                try:
+                    await reaction.message.edit(embed=embed)
+                    logger.info(
+                        f"Added explanation to alert message {reaction.message.id}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error updating message with explanation: {e}")
+
+    async def on_reaction_remove(self, reaction, user):
+        """Handle when users remove reactions"""
+        # We want to handle all users removing reactions (not just the bot)
+
         # Check if it's a question mark reaction on one of our alert messages
         if (
             reaction.emoji == "❓"
             and reaction.message.id in self.alert_messages
             and reaction.message.author.id == self.user.id
         ):
-            alert_type = self.alert_messages[reaction.message.id]
+            # Check if there are any question mark reactions left from users (excluding the bot)
+            has_user_question_mark = False
+            for r in reaction.message.reactions:
+                if r.emoji == "❓":
+                    # Get detailed list of users who reacted
+                    users = [u async for u in r.users()]
+                    # Check if any non-bot users have the reaction
+                    if any(u.id != self.user.id for u in users):
+                        has_user_question_mark = True
+                        break
 
-            # Get the original embed
-            embed = reaction.message.embeds[0] if reaction.message.embeds else None
+            # If no more user question mark reactions, remove the explanation
+            if not has_user_question_mark:
+                # Get the original embed
+                embed = reaction.message.embeds[0] if reaction.message.embeds else None
 
-            if not embed:
-                return
+                if not embed:
+                    return
 
-            # Check if we already added the explanation (to avoid adding it multiple times)
-            if any(field.name == "Explanation" for field in embed.fields):
-                return
+                # Find and remove the Explanation field
+                new_fields = []
+                for field in embed.fields:
+                    if field.name != "Explanation":
+                        new_fields.append(field)
 
-            # Find matching explanation
-            explanation = None
-            for key, value in ALERT_EXPLANATIONS.items():
-                if key in alert_type:
-                    explanation = value
-                    break
+                # If no fields were removed, no need to update
+                if len(new_fields) == len(embed.fields):
+                    return
 
-            if not explanation:
-                explanation = "This alert suggests a potential trading opportunity. For more details on technical analysis, please research the specific indicator mentioned."
+                # Create a new embed with the same properties but without the explanation field
+                new_embed = discord.Embed(
+                    title=embed.title,
+                    description=embed.description,
+                    color=embed.color,
+                    timestamp=embed.timestamp,
+                )
 
-            # Add explanation field
-            embed.add_field(name="Explanation", value=explanation, inline=False)
+                # Add remaining fields
+                for field in new_fields:
+                    new_embed.add_field(
+                        name=field.name, value=field.value, inline=field.inline
+                    )
 
-            # Update the message
-            try:
-                await reaction.message.edit(embed=embed)
-                logger.info(f"Added explanation to alert message {reaction.message.id}")
-            except Exception as e:
-                logger.error(f"Error updating message with explanation: {e}")
+                # Update the message
+                try:
+                    await reaction.message.edit(embed=new_embed)
+                    logger.info(
+                        f"Removed explanation from alert message {reaction.message.id}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error updating message to remove explanation: {e}")
 
     async def on_guild_join(self, guild):
         """Called when the bot joins a new guild (server)"""
@@ -212,7 +293,8 @@ class TradingAlertsBot(discord.Client):
 
         embed.add_field(
             name="Tip",
-            value="Click the ❓ reaction on alerts to get a simple explanation of what the alert means.",
+            value="Click the ❓ reaction on alerts to get an explanation of what the alert means.\n"
+            "Click the ✅ reaction to dismiss alerts you've seen.",
             inline=False,
         )
 
@@ -300,7 +382,8 @@ class TradingAlertsBot(discord.Client):
                                 f"Sent alert for {symbol} to channel {current_channel.id}"
                             )
 
-                            # Add question mark reaction for explanation
+                            # Add reactions: checkmark to delete and question mark for explanation
+                            await message.add_reaction("✅")
                             await message.add_reaction("❓")
 
                             # Extract alert type for explanations
