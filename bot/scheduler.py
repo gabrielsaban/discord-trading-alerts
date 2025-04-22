@@ -374,6 +374,14 @@ class AlertScheduler:
                             f"Found {len(alerts)} alerts for {user_id} on {symbol} ({interval})"
                         )
 
+                        # Modify alerts to include interval information
+                        modified_alerts = []
+                        for alert in alerts:
+                            # Add interval to be used in the title only, not in the body message
+                            # Format: original_alert | interval (will be parsed by discord_bot.py)
+                            modified_alert = f"{alert} | {interval}"
+                            modified_alerts.append(modified_alert)
+
                         # Record alerts in the database
                         for alert in alerts:
                             alert_type = self._extract_alert_type(alert)
@@ -381,8 +389,9 @@ class AlertScheduler:
                                 user_id, symbol, interval, alert_type, alert
                             )
 
-                        # Call the callback if provided
-                        self._run_callback(user_id, alerts)
+                        # Send modified alerts with interval included
+                        if modified_alerts:
+                            self._run_callback(user_id, modified_alerts)
 
             except Exception as e:
                 logger.error(f"Error checking alerts for {symbol} ({interval}): {e}")
