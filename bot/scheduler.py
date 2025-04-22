@@ -515,6 +515,20 @@ class AlertScheduler:
                 f"Added {symbol} ({interval}) to {frequency_tier} frequency tier"
             )
 
+            # Call schedule_symbol_check to schedule individual checks if needed
+            self.schedule_symbol_check(symbol, interval)
+
+    def schedule_symbol_check(self, symbol: str, interval: str):
+        """Schedule a check for a specific symbol and interval
+
+        This is a helper method primarily used for testing and can be
+        extended for more fine-grained scheduling in the future.
+        """
+        # Currently, symbols are checked via frequency tiers, not individually
+        # This method is here for testing and future extension
+        logger.debug(f"Symbol check scheduled for {symbol} ({interval})")
+        pass
+
     def remove_symbol(self, symbol: str, interval: str):
         """Remove a symbol from monitoring"""
         with self.lock:

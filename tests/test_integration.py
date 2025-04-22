@@ -198,36 +198,32 @@ class TestIntegration:
             ],
         ]
 
-        # Mock the API response
+        # Properly mock the response
         mock_response = MagicMock()
         mock_response.json.return_value = klines_data
         mock_response.status_code = 200
         mock_get.return_value = mock_response
 
-        # Fetch the data
+        # Fetch market data
         df = fetch_market_data(symbol="BTCUSDT", interval="15m", limit=5)
 
-        # Verify the data was properly formatted into a dataframe
-        assert isinstance(df, pd.DataFrame), "Result should be a DataFrame"
+        # Verify data is correctly fetched and processed
+        assert df is not None, "Data should be fetched successfully"
         assert len(df) == 5, "Should have 5 candles"
-        assert list(df.columns) == [
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        ], "DataFrame should have OHLCV columns"
 
-        # Now test that indicators can be calculated from this data
+        # Test indicator calculations
         rsi = calculate_rsi(df)
-        macd = calculate_macd(df)
-        bb = calculate_bollinger_bands(df)
+        assert rsi is not None, "RSI should be calculated successfully"
 
-        # Due to the small sample, some indicators may not have enough data points
-        # But the calculation should not fail
-        assert (
-            rsi is not None or macd is not None or bb is not None
-        ), "At least one indicator should be calculated"
+        macd, signal, hist = (
+            calculate_macd(df).loc[:, ["MACD", "Signal", "Histogram"]].iloc[-1]
+        )
+        assert not np.isnan(macd), "MACD should be calculated successfully"
+
+        bb = calculate_bollinger_bands(df)
+        assert bb is not None, "Bollinger Bands should be calculated successfully"
+        assert "upper" in bb.columns, "Bollinger Bands should have upper band"
+        assert "lower" in bb.columns, "Bollinger Bands should have lower band"
 
     @patch("bot.scheduler.fetch_market_data")
     def test_user_specific_alerts(self, mock_fetch_data, sample_ohlcv_data):

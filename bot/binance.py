@@ -200,42 +200,29 @@ def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
                         df[col] = pd.to_numeric(df[col], errors="coerce")
 
             # Convert timestamp to datetime and set as index
-            try:
-                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-                df = df.set_index("timestamp")
-            except (ValueError, TypeError) as e:
-                logger.error(f"Error converting timestamp: {e}")
-                # If timestamp conversion fails, use a range index
-                df = df.reset_index(drop=True)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df = df.set_index("timestamp")
 
-            # Keep only OHLCV columns and handle missing columns
-            ohlcv_columns = ["open", "high", "low", "close", "volume"]
-            for col in ohlcv_columns:
-                if col not in df.columns:
-                    logger.warning(
-                        f"Missing column {col} in response. Adding with NaN values."
-                    )
-                    df[col] = float("nan")
+            # Keep only the basic OHLCV columns for simplicity
+            df = df[["open", "high", "low", "close", "volume"]].copy()
 
-            ohlcv_df = df[ohlcv_columns]
-
-            # Drop rows with NaN in critical columns
-            ohlcv_df = ohlcv_df.dropna(subset=["open", "high", "low", "close"])
-
-            return ohlcv_df
+            return df
 
         except Exception as e:
             logger.error(f"Error processing Binance data for {symbol}: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
             return None
 
     except Timeout:
-        logger.error(f"Timeout error fetching data from Binance for {symbol}")
+        logger.error(f"Request to Binance API timed out for {symbol}")
         return None
     except ConnectionError:
-        logger.error(f"Connection error fetching data from Binance for {symbol}")
+        logger.error(f"Connection error accessing Binance API for {symbol}")
         return None
     except RequestException as e:
-        logger.error(f"Request error fetching data from Binance for {symbol}: {e}")
+        logger.error(f"Error fetching data from Binance API for {symbol}: {e}")
         return None
     except Exception as e:
         logger.error(f"Unexpected error fetching data from Binance for {symbol}: {e}")
@@ -273,24 +260,25 @@ def fetch_market_data(symbol="BTCUSDT", interval="15m", limit=100, force_refresh
     # Cache miss or forced refresh, fetch from API
     df = get_binance_klines(symbol, interval, limit)
 
-    if df is not None:
-        # Check if we have enough data for analysis
-        if not df.empty and len(df) >= 2:  # Need at least 2 candles for most indicators
-            # Store in cache
-            cache = get_cache()
-            cache.put(symbol, interval, df)
-            return df
-        elif not df.empty:
-            logger.warning(
-                f"Not enough data points for {symbol} ({interval}), got {len(df)}"
-            )
-            return df  # Return what we have even if it's not enough
-        else:
-            logger.warning(f"Empty dataframe returned for {symbol} ({interval})")
-            return df  # Return empty DataFrame instead of None
-    else:
+    # Always return None when API returns None (error cases)
+    if df is None:
         logger.error(f"Failed to fetch data for {symbol} ({interval})")
         return None
+
+    # If we got data back
+    if not df.empty and len(df) >= 2:  # Need at least 2 candles for most indicators
+        # Store in cache
+        cache = get_cache()
+        cache.put(symbol, interval, df)
+        return df
+    elif not df.empty:
+        logger.warning(
+            f"Not enough data points for {symbol} ({interval}), got {len(df)}"
+        )
+        return df  # Return what we have even if it's not enough
+    else:
+        logger.warning(f"Empty dataframe returned for {symbol} ({interval})")
+        return df  # Return empty DataFrame instead of None
 
 
 def fetch_market_data_batch(
