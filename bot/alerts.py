@@ -1,17 +1,18 @@
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Tuple, Optional, Any
-from datetime import datetime, timedelta
 import logging
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 
 # Import indicator functions
 from bot.indicators import (
-    calculate_rsi,
-    calculate_macd,
-    calculate_ema_cross,
-    calculate_bollinger_bands,
-    calculate_volume_spikes,
     calculate_adx,
+    calculate_bollinger_bands,
+    calculate_ema_cross,
+    calculate_macd,
+    calculate_rsi,
+    calculate_volume_spikes,
 )
 
 # Configure logger
@@ -153,24 +154,24 @@ class MacdAlert(AlertCondition):
     def check(self, df: pd.DataFrame) -> Optional[str]:
         if not self.can_trigger():
             return None
-            
+
         macd_df = calculate_macd(df)
         if macd_df is None or len(macd_df) < 2:
             return None
-            
+
         # Get last two rows to detect crosses
         prev, latest = macd_df.iloc[-2], macd_df.iloc[-1]
-        latest_price = df['close'].iloc[-1]
+        latest_price = df["close"].iloc[-1]
         price_str = self.format_price(latest_price)
-        
+
         message = None
         # Check for bullish crossover (MACD crosses above Signal)
-        if latest['MACD'] > latest['Signal'] and prev['MACD'] <= prev['Signal']:
+        if latest["MACD"] > latest["Signal"] and prev["MACD"] <= prev["Signal"]:
             message = f"🟢 **MACD BULLISH CROSS**: {self.symbol}\nPrice: {price_str}"
         # Check for bearish crossover (MACD crosses below Signal)
-        elif latest['MACD'] < latest['Signal'] and prev['MACD'] >= prev['Signal']:
+        elif latest["MACD"] < latest["Signal"] and prev["MACD"] >= prev["Signal"]:
             message = f"🔴 **MACD BEARISH CROSS**: {self.symbol}\nPrice: {price_str}"
-        
+
         if message:
             self.mark_triggered()
         return message
@@ -189,22 +190,22 @@ class EmaCrossAlert(AlertCondition):
     def check(self, df: pd.DataFrame) -> Optional[str]:
         if not self.can_trigger():
             return None
-            
+
         ema_df = calculate_ema_cross(df, short=self.short, long=self.long)
         if ema_df is None or len(ema_df) < 2:
             return None
-            
-        latest_price = df['close'].iloc[-1]
+
+        latest_price = df["close"].iloc[-1]
         price_str = self.format_price(latest_price)
-        
+
         message = None
         # Check for bullish cross (short EMA crosses above long EMA)
-        if ema_df['Cross_Up'].iloc[-1]:
+        if ema_df["Cross_Up"].iloc[-1]:
             message = f"🟢 **EMA BULLISH CROSS**: {self.symbol} EMA{self.short} crossed above EMA{self.long}\nPrice: {price_str}"
         # Check for bearish cross (short EMA crosses below long EMA)
-        elif ema_df['Cross_Down'].iloc[-1]:
+        elif ema_df["Cross_Down"].iloc[-1]:
             message = f"🔴 **EMA BEARISH CROSS**: {self.symbol} EMA{self.short} crossed below EMA{self.long}\nPrice: {price_str}"
-        
+
         if message:
             self.mark_triggered()
         return message
@@ -488,30 +489,34 @@ class AlertManager:
 
     def _is_globally_cooled_down(self, symbol: str, alert_type: str) -> bool:
         """Check if an alert type for a symbol is in global cooldown
-        
+
         Returns True if the alert can trigger (NOT in cooldown)
         Returns False if the alert should not trigger (IS in cooldown)
         """
         now = datetime.now()
-        
+
         # Initialize cooldown tracking for this symbol if needed
         if symbol not in self.global_cooldowns:
             self.global_cooldowns[symbol] = {}
-            
+
         # If this alert type has never been triggered, it's not in cooldown
         if alert_type not in self.global_cooldowns[symbol]:
             return True
-            
+
         # Check if cooldown period has passed
         last_triggered = self.global_cooldowns[symbol][alert_type]
         cooldown_period = timedelta(minutes=self.global_cooldown_minutes)
-        
+
         if now - last_triggered < cooldown_period:
             # Still in cooldown
-            minutes_remaining = int((cooldown_period - (now - last_triggered)).total_seconds() / 60)
-            logger.debug(f"{alert_type} for {symbol} in GLOBAL cooldown ({minutes_remaining} minutes remaining)")
+            minutes_remaining = int(
+                (cooldown_period - (now - last_triggered)).total_seconds() / 60
+            )
+            logger.debug(
+                f"{alert_type} for {symbol} in GLOBAL cooldown ({minutes_remaining} minutes remaining)"
+            )
             return False
-        
+
         # Cooldown period has passed
         return True
 
@@ -519,7 +524,7 @@ class AlertManager:
         """Mark an alert type as triggered for global cooldown tracking"""
         if symbol not in self.global_cooldowns:
             self.global_cooldowns[symbol] = {}
-            
+
         self.global_cooldowns[symbol][alert_type] = datetime.now()
         logger.debug(f"Updated global cooldown for {alert_type} on {symbol}")
 
@@ -536,12 +541,14 @@ class AlertManager:
             # Get alert type name for global cooldown tracking
             alert_type = type(alert).__name__
             logger.debug(f"Checking alert type {alert_type} for {symbol}")
-            
+
             # First check global cooldown (across timeframes)
             if not self._is_globally_cooled_down(symbol, alert_type):
-                logger.debug(f"Skipping {alert_type} for {symbol} due to global cooldown")
+                logger.debug(
+                    f"Skipping {alert_type} for {symbol} due to global cooldown"
+                )
                 continue
-                
+
             # Check the alert
             message = alert.check(df)
             if message:
@@ -575,8 +582,9 @@ class AlertManager:
 
 # Testing functionality
 if __name__ == "__main__":
-    from binance import fetch_market_data
     import time
+
+    from binance import fetch_market_data
 
     def test_alerts(symbol: str = "BTCUSDT", interval: str = "15m", limit: int = 100):
         print(f"\n===== Testing alerts for {symbol} ({interval}) =====\n")

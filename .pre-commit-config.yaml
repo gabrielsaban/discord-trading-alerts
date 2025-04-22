@@ -18,10 +18,3 @@ repos:
     hooks:
     -   id: isort
         args: ["--profile", "black", "--filter-files"]
-
--   repo: https://github.com/pycqa/flake8
-    rev: 6.0.0
-    hooks:
-    -   id: flake8
-        additional_dependencies: [flake8-docstrings]
-        args: [--max-line-length=88, --extend-ignore=E203]

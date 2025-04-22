@@ -1,10 +1,11 @@
-import pytest
 import threading
 import time
 from unittest.mock import MagicMock, patch
 
-from bot.scheduler import AlertScheduler
+import pytest
+
 from bot.alerts import AlertManager
+from bot.scheduler import AlertScheduler
 
 
 class TestAlertScheduler:

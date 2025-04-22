@@ -1,18 +1,20 @@
-import time
-import threading
-import logging
 import asyncio
-from typing import Dict, List, Tuple, Callable, Any, Optional, Union, Coroutine
+import logging
+import threading
+import time
 from datetime import datetime, timedelta
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.jobstores.base import JobLookupError
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Tuple, Union
+
 import pandas as pd
+from apscheduler.jobstores.base import JobLookupError
+from apscheduler.schedulers.background import BackgroundScheduler
+
+from bot.alerts import AlertManager
 
 # Import our modules
 from bot.binance import fetch_market_data
-from bot.alerts import AlertManager
-from bot.db import get_db
 from bot.data_cache import get_cache
+from bot.db import get_db
 
 # Setup logging
 logging.basicConfig(
@@ -40,9 +42,9 @@ DEFAULT_INTERVALS = {
 # Decoupled frequency settings - all timeframes are checked at this interval
 # Timeframes are grouped into frequency tiers to balance API usage
 CHECK_FREQUENCY = {
-    "high": 120,     # 2 minutes for short timeframes (1m, 3m, 5m)
-    "medium": 300,   # 5 minutes for medium timeframes (15m, 30m, 1h)
-    "low": 600,      # 10 minutes for longer timeframes (2h, 4h+)
+    "high": 120,  # 2 minutes for short timeframes (1m, 3m, 5m)
+    "medium": 300,  # 5 minutes for medium timeframes (15m, 30m, 1h)
+    "low": 600,  # 10 minutes for longer timeframes (2h, 4h+)
 }
 
 # Map intervals to frequency tiers
@@ -108,8 +110,14 @@ class AlertScheduler:
         ] = {}  # (symbol, interval) -> last run time
         self.lock = threading.RLock()  # For thread safety
         self.scheduled_symbols = set()  # Track which symbols are scheduled
-        self.next_check_time: Dict[Tuple[str, str], datetime] = {}  # (symbol, interval) -> next check time
-        self.symbols_by_frequency = {"high": set(), "medium": set(), "low": set()}  # Organize symbols by frequency tier
+        self.next_check_time: Dict[
+            Tuple[str, str], datetime
+        ] = {}  # (symbol, interval) -> next check time
+        self.symbols_by_frequency = {
+            "high": set(),
+            "medium": set(),
+            "low": set(),
+        }  # Organize symbols by frequency tier
 
         # Create event loop for running async callbacks
         self.loop = asyncio.new_event_loop()
@@ -258,15 +266,15 @@ class AlertScheduler:
     def check_frequency_tier(self, frequency_tier: str):
         """
         Check all symbols in a frequency tier
-        
+
         This is called periodically by the scheduler for each frequency tier
         """
         logger.info(f"Running {frequency_tier} frequency tier check")
-        
+
         # Make a copy to avoid modification during iteration
         with self.lock:
             symbols_to_check = list(self.symbols_by_frequency[frequency_tier])
-        
+
         # Check each symbol/interval in this frequency tier
         for symbol, interval in symbols_to_check:
             try:
@@ -274,6 +282,7 @@ class AlertScheduler:
             except Exception as e:
                 logger.error(f"Error checking {symbol} ({interval}): {e}")
                 import traceback
+
                 logger.error(traceback.format_exc())
 
     def check_symbol_alerts(self, symbol: str, interval: str):
@@ -292,34 +301,45 @@ class AlertScheduler:
             # Set the next check time (used for status reporting)
             frequency_tier = INTERVAL_FREQUENCY_MAP.get(interval, "medium")
             seconds = CHECK_FREQUENCY.get(frequency_tier, 300)
-            self.next_check_time[(symbol, interval)] = datetime.now() + timedelta(seconds=seconds)
+            self.next_check_time[(symbol, interval)] = datetime.now() + timedelta(
+                seconds=seconds
+            )
 
             logger.info(f"Checking alerts for {symbol} ({interval})")
 
             try:
                 # Fetch market data, using cache when possible
                 limit = DEFAULT_CANDLE_LIMITS.get(interval, 200)
-                
+
                 # Determine if we should force refresh based on the interval
                 # For shorter timeframes, we need fresher data
                 force_refresh = False
                 interval_seconds = DEFAULT_INTERVALS.get(interval, 900)
                 cache = get_cache()
                 cached_df = cache.get(symbol, interval)
-                
+
                 # If we're close to the end of the current candle, force refresh
                 if cached_df is not None and not cached_df.empty:
                     latest_time = cached_df.index[-1]
                     now = datetime.now()
                     # Use pandas to handle timezones properly
-                    time_diff = (now - pd.Timestamp(latest_time).to_pydatetime()).total_seconds()
-                    
+                    time_diff = (
+                        now - pd.Timestamp(latest_time).to_pydatetime()
+                    ).total_seconds()
+
                     # If we're in the last 20% of the candle duration, force refresh
                     if time_diff > interval_seconds * 0.8:
                         force_refresh = True
-                        logger.debug(f"Forcing refresh for {symbol} ({interval}) as current candle is nearly complete")
-                
-                df = fetch_market_data(symbol=symbol, interval=interval, limit=limit, force_refresh=force_refresh)
+                        logger.debug(
+                            f"Forcing refresh for {symbol} ({interval}) as current candle is nearly complete"
+                        )
+
+                df = fetch_market_data(
+                    symbol=symbol,
+                    interval=interval,
+                    limit=limit,
+                    force_refresh=force_refresh,
+                )
 
                 if df is None or df.empty:
                     logger.warning(f"Failed to fetch data for {symbol} ({interval})")
@@ -367,6 +387,7 @@ class AlertScheduler:
             except Exception as e:
                 logger.error(f"Error checking alerts for {symbol} ({interval}): {e}")
                 import traceback
+
                 logger.error(traceback.format_exc())
 
     def setup_user_alerts(
@@ -379,13 +400,13 @@ class AlertScheduler:
     ):
         """Set up alerts based on user preferences"""
         from bot.alerts import (
-            RsiAlert,
-            MacdAlert,
-            EmaCrossAlert,
-            BollingerBandAlert,
-            VolumeSpikeAlert,
             AdxAlert,
+            BollingerBandAlert,
+            EmaCrossAlert,
+            MacdAlert,
             PatternAlert,
+            RsiAlert,
+            VolumeSpikeAlert,
         )
 
         # Clear existing alerts for this user/symbol
@@ -477,18 +498,22 @@ class AlertScheduler:
             # Add to scheduled symbols set
             symbol_key = f"{symbol.upper()}_{interval}"
             self.scheduled_symbols.add(symbol_key)
-            
+
             # Determine frequency tier for this interval
             frequency_tier = INTERVAL_FREQUENCY_MAP.get(interval, "medium")
-            
+
             # Add to appropriate frequency tier
             self.symbols_by_frequency[frequency_tier].add((symbol, interval))
-            
+
             # Initialize a 'next check time' for status reporting
             seconds = CHECK_FREQUENCY.get(frequency_tier, 300)
-            self.next_check_time[(symbol, interval)] = datetime.now() + timedelta(seconds=seconds)
-            
-            logger.info(f"Added {symbol} ({interval}) to {frequency_tier} frequency tier")
+            self.next_check_time[(symbol, interval)] = datetime.now() + timedelta(
+                seconds=seconds
+            )
+
+            logger.info(
+                f"Added {symbol} ({interval}) to {frequency_tier} frequency tier"
+            )
 
     def remove_symbol(self, symbol: str, interval: str):
         """Remove a symbol from monitoring"""
@@ -496,17 +521,19 @@ class AlertScheduler:
             symbol_key = f"{symbol.upper()}_{interval}"
             if symbol_key in self.scheduled_symbols:
                 self.scheduled_symbols.remove(symbol_key)
-                
+
                 # Remove from frequency tiers
                 for tier in self.symbols_by_frequency:
                     if (symbol, interval) in self.symbols_by_frequency[tier]:
                         self.symbols_by_frequency[tier].remove((symbol, interval))
-                        logger.info(f"Removed {symbol} ({interval}) from {tier} frequency tier")
-                
+                        logger.info(
+                            f"Removed {symbol} ({interval}) from {tier} frequency tier"
+                        )
+
                 # Remove next check time
                 if (symbol, interval) in self.next_check_time:
                     del self.next_check_time[(symbol, interval)]
-                
+
                 # Remove last run time
                 if (symbol, interval) in self.last_run:
                     del self.last_run[(symbol, interval)]
@@ -515,38 +542,40 @@ class AlertScheduler:
         """Get status information about the scheduler"""
         with self.lock:
             now = datetime.now()
-            
+
             # Count symbols by frequency tier
             symbols_count = {
-                tier: len(symbols) 
+                tier: len(symbols)
                 for tier, symbols in self.symbols_by_frequency.items()
             }
-            
+
             # Get next check times
             next_checks = []
             for (symbol, interval), next_time in self.next_check_time.items():
                 time_left = (next_time - now).total_seconds()
                 if time_left > 0:  # Only include future checks
-                    next_checks.append({
-                        "symbol": symbol,
-                        "interval": interval,
-                        "next_check": next_time.strftime("%H:%M:%S"),
-                        "seconds_left": int(time_left)
-                    })
-            
+                    next_checks.append(
+                        {
+                            "symbol": symbol,
+                            "interval": interval,
+                            "next_check": next_time.strftime("%H:%M:%S"),
+                            "seconds_left": int(time_left),
+                        }
+                    )
+
             # Sort by time left
             next_checks.sort(key=lambda x: x["seconds_left"])
-            
+
             # Get cache stats
             cache = get_cache()
             cache_stats = cache.get_stats()
-            
+
             return {
                 "running": self.running,
                 "total_symbols": len(self.scheduled_symbols),
                 "symbols_by_frequency": symbols_count,
                 "upcoming_checks": next_checks[:10],  # Show only next 10 checks
-                "cache_stats": cache_stats
+                "cache_stats": cache_stats,
             }
 
     def stop(self):

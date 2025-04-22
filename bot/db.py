@@ -1,10 +1,10 @@
-import sqlite3
-import os
 import json
-import threading
-from typing import List, Dict, Any, Optional, Tuple, Set
-from datetime import datetime, timedelta
 import logging
+import os
+import sqlite3
+import threading
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Setup logging
 logging.basicConfig(
@@ -456,7 +456,7 @@ class DatabaseManager:
         try:
             cursor = self.connection.cursor()
             query = """
-            SELECT * FROM triggered_alerts 
+            SELECT * FROM triggered_alerts
             WHERE user_id = ? AND triggered_at > datetime('now', ?)
             """
             params = [user_id, f"-{hours} hours"]

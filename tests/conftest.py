@@ -1,11 +1,12 @@
-import os
-import sys
-import pytest
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Any
-import sqlite3
 import logging
+import os
+import sqlite3
+import sys
+from typing import Any, Dict, List
+
+import numpy as np
+import pandas as pd
+import pytest
 
 # Ensure bot module is in path for tests
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -15,9 +16,10 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
+from bot.alerts import AlertCondition, AlertManager
+
 # Import bot modules after path setup
 from bot.db import DatabaseManager
-from bot.alerts import AlertManager, AlertCondition
 from bot.indicators import validate_data
 
 

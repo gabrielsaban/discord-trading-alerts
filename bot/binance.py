@@ -1,10 +1,12 @@
-import requests
-import pandas as pd
-import pandas_ta as ta
 import json
 import logging
 from datetime import datetime
-from requests.exceptions import RequestException, Timeout, ConnectionError
+
+import pandas as pd
+import pandas_ta as ta
+import requests
+from requests.exceptions import ConnectionError, RequestException, Timeout
+
 from bot.data_cache import get_cache
 
 # Set up logging
@@ -53,9 +55,9 @@ DEFAULT_BATCH_SIZE = 5  # Process 5 symbols at a time
 
 # How often to force refresh data by interval (in seconds)
 FORCE_REFRESH_SECONDS = {
-    "high": 60,     # High frequency: force refresh every minute
+    "high": 60,  # High frequency: force refresh every minute
     "medium": 300,  # Medium frequency: force refresh every 5 minutes
-    "low": 900,     # Low frequency: force refresh every 15 minutes
+    "low": 900,  # Low frequency: force refresh every 15 minutes
 }
 
 
@@ -243,7 +245,7 @@ def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
 def fetch_market_data(symbol="BTCUSDT", interval="15m", limit=100, force_refresh=False):
     """
     Fetch and format market data ready for technical analysis, using cache when possible
-    
+
     Parameters:
     -----------
     symbol : str
@@ -254,7 +256,7 @@ def fetch_market_data(symbol="BTCUSDT", interval="15m", limit=100, force_refresh
         Number of candles to retrieve
     force_refresh : bool
         If True, always fetch fresh data from API instead of using cache
-        
+
     Returns:
     --------
     pandas.DataFrame or None
@@ -267,10 +269,10 @@ def fetch_market_data(symbol="BTCUSDT", interval="15m", limit=100, force_refresh
         if cached_df is not None:
             logger.debug(f"Using cached data for {symbol} ({interval})")
             return cached_df
-    
+
     # Cache miss or forced refresh, fetch from API
     df = get_binance_klines(symbol, interval, limit)
-    
+
     if df is not None:
         # Check if we have enough data for analysis
         if not df.empty and len(df) >= 2:  # Need at least 2 candles for most indicators
@@ -279,7 +281,9 @@ def fetch_market_data(symbol="BTCUSDT", interval="15m", limit=100, force_refresh
             cache.put(symbol, interval, df)
             return df
         elif not df.empty:
-            logger.warning(f"Not enough data points for {symbol} ({interval}), got {len(df)}")
+            logger.warning(
+                f"Not enough data points for {symbol} ({interval}), got {len(df)}"
+            )
             return df  # Return what we have even if it's not enough
         else:
             logger.warning(f"Empty dataframe returned for {symbol} ({interval})")
@@ -288,10 +292,17 @@ def fetch_market_data(symbol="BTCUSDT", interval="15m", limit=100, force_refresh
         logger.error(f"Failed to fetch data for {symbol} ({interval})")
         return None
 
-def fetch_market_data_batch(symbols, interval="15m", limit=100, force_refresh=False, batch_size=DEFAULT_BATCH_SIZE):
+
+def fetch_market_data_batch(
+    symbols,
+    interval="15m",
+    limit=100,
+    force_refresh=False,
+    batch_size=DEFAULT_BATCH_SIZE,
+):
     """
     Fetch market data for multiple symbols at once
-    
+
     Parameters:
     -----------
     symbols : list
@@ -304,19 +315,21 @@ def fetch_market_data_batch(symbols, interval="15m", limit=100, force_refresh=Fa
         If True, always fetch fresh data from API
     batch_size : int
         Number of symbols to process in each batch
-        
+
     Returns:
     --------
     dict
         Dictionary mapping symbols to their dataframes
     """
     results = {}
-    
+
     # Process symbols in batches to avoid overwhelming the API
     for i in range(0, len(symbols), batch_size):
-        batch = symbols[i:i+batch_size]
-        logger.debug(f"Processing batch {i//batch_size + 1}/{(len(symbols) + batch_size - 1)//batch_size}: {batch}")
-        
+        batch = symbols[i : i + batch_size]
+        logger.debug(
+            f"Processing batch {i//batch_size + 1}/{(len(symbols) + batch_size - 1)//batch_size}: {batch}"
+        )
+
         for symbol in batch:
             try:
                 df = fetch_market_data(symbol, interval, limit, force_refresh)
@@ -324,20 +337,21 @@ def fetch_market_data_batch(symbols, interval="15m", limit=100, force_refresh=Fa
             except Exception as e:
                 logger.error(f"Error fetching data for {symbol}: {e}")
                 results[symbol] = None
-    
+
     return results
+
 
 def should_force_refresh(interval, last_check_time=None):
     """
     Determine if we should force refresh data based on interval and last check time
-    
+
     Parameters:
     -----------
     interval : str
         The timeframe interval
     last_check_time : datetime, optional
         Last time this interval was checked
-        
+
     Returns:
     --------
     bool
@@ -345,16 +359,16 @@ def should_force_refresh(interval, last_check_time=None):
     """
     if last_check_time is None:
         return True
-        
+
     # Get the frequency tier for this interval
     frequency = INTERVAL_TO_FREQUENCY.get(interval, "medium")
-    
+
     # Get how long we should wait before forcing refresh
     refresh_seconds = FORCE_REFRESH_SECONDS.get(frequency, 300)
-    
+
     # Calculate time elapsed since last check
     elapsed = (datetime.now() - last_check_time).total_seconds()
-    
+
     # Force refresh if enough time has passed
     return elapsed >= refresh_seconds
 

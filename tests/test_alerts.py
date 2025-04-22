@@ -1,16 +1,16 @@
-import pytest
 import pandas as pd
+import pytest
 
 from bot.alerts import (
-    AlertCondition,
-    RsiAlert,
-    MacdAlert,
-    EmaCrossAlert,
-    BollingerBandAlert,
-    VolumeSpikeAlert,
     AdxAlert,
-    PatternAlert,
+    AlertCondition,
     AlertManager,
+    BollingerBandAlert,
+    EmaCrossAlert,
+    MacdAlert,
+    PatternAlert,
+    RsiAlert,
+    VolumeSpikeAlert,
 )
 
 

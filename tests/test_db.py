@@ -1,8 +1,9 @@
-import pytest
 import os
 import sqlite3
 import threading
 from datetime import datetime, timedelta
+
+import pytest
 
 from bot.db import DatabaseManager
 

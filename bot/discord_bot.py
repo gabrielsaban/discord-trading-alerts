@@ -1,16 +1,18 @@
-import os
-import discord
-import logging
 import asyncio
 import json
-from typing import Dict, List, Any, Optional, Literal
+import logging
+import os
+from typing import Any, Dict, List, Literal, Optional
+
+import discord
 from discord import app_commands
 from dotenv import load_dotenv
+
+from bot.binance import fetch_market_data
 
 # Load our modules
 from bot.db import get_db
 from bot.scheduler import get_scheduler
-from bot.binance import fetch_market_data
 
 # Set up logging
 logging.basicConfig(
@@ -62,13 +64,14 @@ ALERT_EXPLANATIONS = {
     "EVENING STAR": "A bearish reversal pattern that appears at the top of an uptrend. It suggests the upward momentum is weakening and prices may start falling.",
     "MORNING STAR": "A bullish reversal pattern that appears at the bottom of a downtrend. It suggests the downward momentum is weakening and prices may start rising.",
     "BULLISH ENGULFING": "A candlestick pattern where a green candle completely engulfs the previous red candle. This suggests buying pressure has overwhelmed selling pressure.",
-    "BEARISH ENGULFING": "A candlestick pattern where a red candle completely engulfs the previous green candle. This suggests selling pressure has overwhelmed buying pressure."
+    "BEARISH ENGULFING": "A candlestick pattern where a red candle completely engulfs the previous green candle. This suggests selling pressure has overwhelmed buying pressure.",
 }
 
 # Set up intents
 intents = discord.Intents.default()
 intents.message_content = True  # Allow the bot to see message content
 intents.reactions = True  # Enable reaction events
+
 
 # Define the bot client
 class TradingAlertsBot(discord.Client):
@@ -81,7 +84,9 @@ class TradingAlertsBot(discord.Client):
         ] = {}  # user_id -> list of channels
         self.synced = False
         self.scheduler = None
-        self.alert_messages = {}  # Store message_id -> alert_type mapping for reaction handling
+        self.alert_messages = (
+            {}
+        )  # Store message_id -> alert_type mapping for reaction handling
 
     async def setup_hook(self):
         """Set up the bot's background tasks and sync commands"""
@@ -118,37 +123,38 @@ class TradingAlertsBot(discord.Client):
         # Ignore bot's own reactions
         if user.id == self.user.id:
             return
-            
+
         # Check if it's a question mark reaction on one of our alert messages
-        if (reaction.emoji == "❓" and 
-            reaction.message.id in self.alert_messages and
-            reaction.message.author.id == self.user.id):
-            
+        if (
+            reaction.emoji == "❓"
+            and reaction.message.id in self.alert_messages
+            and reaction.message.author.id == self.user.id
+        ):
             alert_type = self.alert_messages[reaction.message.id]
-            
+
             # Get the original embed
             embed = reaction.message.embeds[0] if reaction.message.embeds else None
-            
+
             if not embed:
                 return
-                
+
             # Check if we already added the explanation (to avoid adding it multiple times)
             if any(field.name == "Explanation" for field in embed.fields):
                 return
-                
+
             # Find matching explanation
             explanation = None
             for key, value in ALERT_EXPLANATIONS.items():
                 if key in alert_type:
                     explanation = value
                     break
-                    
+
             if not explanation:
                 explanation = "This alert suggests a potential trading opportunity. For more details on technical analysis, please research the specific indicator mentioned."
-            
+
             # Add explanation field
             embed.add_field(name="Explanation", value=explanation, inline=False)
-            
+
             # Update the message
             try:
                 await reaction.message.edit(embed=embed)
@@ -293,20 +299,22 @@ class TradingAlertsBot(discord.Client):
                             logger.info(
                                 f"Sent alert for {symbol} to channel {current_channel.id}"
                             )
-                            
+
                             # Add question mark reaction for explanation
                             await message.add_reaction("❓")
-                            
+
                             # Extract alert type for explanations
                             alert_type = ""
                             if "**" in alert:
                                 parts = alert.split("**")
                                 if len(parts) >= 3:
-                                    alert_type = parts[1]  # Get text between first set of **
-                            
+                                    alert_type = parts[
+                                        1
+                                    ]  # Get text between first set of **
+
                             # Store message ID and alert type
                             self.alert_messages[message.id] = alert_type
-                            
+
                         except Exception as e:
                             logger.error(
                                 f"Failed to send alert to channel {current_channel.id}: {e}"
@@ -483,21 +491,21 @@ class TradingAlertsBot(discord.Client):
 
                 # Add timestamp
                 embed.timestamp = discord.utils.utcnow()
-                
+
                 # Send the message
                 message = await channel.send(embed=embed)
                 logger.info(f"Sent test alert: {alert[:30]}...")
-                
+
                 # Add question mark reaction for explanation
                 await message.add_reaction("❓")
-                
+
                 # Extract alert type for explanations
                 alert_type = ""
                 if "**" in alert:
                     parts = alert.split("**")
                     if len(parts) >= 3:
                         alert_type = parts[1]  # Get text between first set of **
-                
+
                 # Store message ID and alert type
                 self.alert_messages[message.id] = alert_type
 

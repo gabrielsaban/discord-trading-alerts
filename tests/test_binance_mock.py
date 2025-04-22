@@ -1,10 +1,11 @@
-import pytest
-import pandas as pd
-import numpy as np
 import json
 import logging
-from unittest.mock import patch, MagicMock
-from requests.exceptions import RequestException, Timeout, ConnectionError
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pandas as pd
+import pytest
+from requests.exceptions import ConnectionError, RequestException, Timeout
 
 from bot.binance import fetch_market_data
 

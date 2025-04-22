@@ -1,15 +1,16 @@
-import pytest
-import pandas as pd
-import numpy as np
+import logging
 import threading
 import time
-import logging
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from bot.db import DatabaseManager
+import numpy as np
+import pandas as pd
+import pytest
+
 from bot.alerts import AlertManager
+from bot.db import DatabaseManager
+from bot.indicators import calculate_bollinger_bands, calculate_macd, calculate_rsi
 from bot.scheduler import AlertScheduler
-from bot.indicators import calculate_rsi, calculate_macd, calculate_bollinger_bands
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

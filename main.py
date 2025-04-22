@@ -1,12 +1,13 @@
-import os
 import logging
+import os
+import platform
 import signal
 import sys
-import platform
-import time
 import threading
-from bot.discord_bot import run_bot, bot
+import time
+
 from bot.db import get_db
+from bot.discord_bot import bot, run_bot
 from bot.scheduler import get_scheduler
 
 # Set up logging

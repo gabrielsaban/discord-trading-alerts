@@ -1,8 +1,9 @@
-import pandas as pd
-import pandas_ta as ta
-import numpy as np
 import logging
 from typing import Optional
+
+import numpy as np
+import pandas as pd
+import pandas_ta as ta
 
 # Setup logging
 logger = logging.getLogger("trading_alerts.indicators")

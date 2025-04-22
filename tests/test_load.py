@@ -1,14 +1,15 @@
-import pytest
+import concurrent.futures
+import logging
+import random
 import threading
 import time
-import random
-import logging
-import concurrent.futures
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from bot.alerts import AlertManager
 from bot.db import DatabaseManager
 from bot.scheduler import AlertScheduler
-from bot.alerts import AlertManager
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
