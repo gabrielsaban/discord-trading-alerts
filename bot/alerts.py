@@ -132,13 +132,13 @@ class RsiAlert(AlertCondition):
             logger.info(
                 f"RSI oversold alert triggered for {self.symbol}: prev_rsi={prev_rsi:.1f}, latest_rsi={latest_rsi:.1f}, threshold={self.oversold}"
             )
-            message = f"🔴 **RSI OVERSOLD**: {self.symbol} RSI at {latest_rsi:.1f}\nPrice: {price_str}"
+            message = f"🔴 **RSI OVERSOLD**: {self.symbol} RSI at {latest_rsi:.1f}\nPrice: {price_str}\nThreshold: {self.oversold} | Latest RSI: {latest_rsi:.1f}"
         # Check for overbought condition (crossing above threshold)
         elif latest_rsi > self.overbought and prev_rsi <= self.overbought:
             logger.info(
                 f"RSI overbought alert triggered for {self.symbol}: prev_rsi={prev_rsi:.1f}, latest_rsi={latest_rsi:.1f}, threshold={self.overbought}"
             )
-            message = f"🟢 **RSI OVERBOUGHT**: {self.symbol} RSI at {latest_rsi:.1f}\nPrice: {price_str}"
+            message = f"🟢 **RSI OVERBOUGHT**: {self.symbol} RSI at {latest_rsi:.1f}\nPrice: {price_str}\nThreshold: {self.overbought} | Latest RSI: {latest_rsi:.1f}"
 
         if message:
             self.mark_triggered()
@@ -167,10 +167,10 @@ class MacdAlert(AlertCondition):
         message = None
         # Check for bullish crossover (MACD crosses above Signal)
         if latest["MACD"] > latest["Signal"] and prev["MACD"] <= prev["Signal"]:
-            message = f"🟢 **MACD BULLISH CROSS**: {self.symbol}\nPrice: {price_str}"
+            message = f"🟢 **MACD BULLISH CROSS**: {self.symbol}\nPrice: {price_str}\nMACD: {latest['MACD']:.4f} | Signal: {latest['Signal']:.4f} | Histogram: {latest['Histogram']:.4f}"
         # Check for bearish crossover (MACD crosses below Signal)
         elif latest["MACD"] < latest["Signal"] and prev["MACD"] >= prev["Signal"]:
-            message = f"🔴 **MACD BEARISH CROSS**: {self.symbol}\nPrice: {price_str}"
+            message = f"🔴 **MACD BEARISH CROSS**: {self.symbol}\nPrice: {price_str}\nMACD: {latest['MACD']:.4f} | Signal: {latest['Signal']:.4f} | Histogram: {latest['Histogram']:.4f}"
 
         if message:
             self.mark_triggered()
@@ -198,13 +198,17 @@ class EmaCrossAlert(AlertCondition):
         latest_price = df["close"].iloc[-1]
         price_str = self.format_price(latest_price)
 
+        # Get the latest EMA values - using correct column names
+        latest_short_ema = ema_df[f"EMA{self.short}"].iloc[-1]
+        latest_long_ema = ema_df[f"EMA{self.long}"].iloc[-1]
+
         message = None
         # Check for bullish cross (short EMA crosses above long EMA)
         if ema_df["Cross_Up"].iloc[-1]:
-            message = f"🟢 **EMA BULLISH CROSS**: {self.symbol} EMA{self.short} crossed above EMA{self.long}\nPrice: {price_str}"
+            message = f"🟢 **EMA BULLISH CROSS**: {self.symbol} EMA{self.short} crossed above EMA{self.long}\nPrice: {price_str}\nEMA{self.short}: {latest_short_ema:.4f} | EMA{self.long}: {latest_long_ema:.4f}"
         # Check for bearish cross (short EMA crosses below long EMA)
         elif ema_df["Cross_Down"].iloc[-1]:
-            message = f"🔴 **EMA BEARISH CROSS**: {self.symbol} EMA{self.short} crossed below EMA{self.long}\nPrice: {price_str}"
+            message = f"🔴 **EMA BEARISH CROSS**: {self.symbol} EMA{self.short} crossed below EMA{self.long}\nPrice: {price_str}\nEMA{self.short}: {latest_short_ema:.4f} | EMA{self.long}: {latest_long_ema:.4f}"
 
         if message:
             self.mark_triggered()
@@ -239,18 +243,18 @@ class BollingerBandAlert(AlertCondition):
 
         # Upper band breakout (price crosses above upper band)
         if latest_price > current["BBU"] and prev_close <= prev["BBU"]:
-            message = f"🟢 **UPPER BB BREAKOUT**: {self.symbol} Price broke above upper band\nPrice: {price_str}"
+            message = f"🟢 **UPPER BB BREAKOUT**: {self.symbol} Price broke above upper band\nPrice: {price_str}\nUpper Band: {current['BBU']:.4f} | Middle Band: {current['BBM']:.4f} | Lower Band: {current['BBL']:.4f}"
 
         # Lower band breakout (price crosses below lower band)
         elif latest_price < current["BBL"] and prev_close >= prev["BBL"]:
-            message = f"🔴 **LOWER BB BREAKOUT**: {self.symbol} Price broke below lower band\nPrice: {price_str}"
+            message = f"🔴 **LOWER BB BREAKOUT**: {self.symbol} Price broke below lower band\nPrice: {price_str}\nUpper Band: {current['BBU']:.4f} | Middle Band: {current['BBM']:.4f} | Lower Band: {current['BBL']:.4f}"
 
         # Band squeeze (bandwidth narrowing significantly)
         elif (
             current["BandWidth"] < self.squeeze_threshold
             and current["BandWidth"] < prev["BandWidth"]
         ):
-            message = f"🟡 **BOLLINGER SQUEEZE**: {self.symbol} Bands narrowing, potential breakout\nPrice: {price_str}"
+            message = f"🟡 **BOLLINGER SQUEEZE**: {self.symbol} Bands narrowing, potential breakout\nPrice: {price_str}\nBandwidth: {current['BandWidth']:.4f} | Threshold: {self.squeeze_threshold}"
 
         if message:
             self.mark_triggered()
@@ -293,9 +297,9 @@ class VolumeSpikeAlert(AlertCondition):
         direction = "UP 📈" if price_change > 0 else "DOWN 📉"
 
         if self.z_score:
-            message = f"📊 **VOLUME Z-SCORE SPIKE**: {self.symbol} {direction}\nZ-score: {latest['z_score']:.1f}\nPrice: {price_str}"
+            message = f"📊 **VOLUME Z-SCORE SPIKE**: {self.symbol} {direction}\nZ-score: {latest['z_score']:.1f}\nPrice: {price_str}\nThreshold: {self.threshold} | Z-score: {latest['z_score']:.2f}"
         else:
-            message = f"📊 **VOLUME SPIKE**: {self.symbol} {direction}\n{latest['volume_ratio']:.1f}x average\nPrice: {price_str}"
+            message = f"📊 **VOLUME SPIKE**: {self.symbol} {direction}\n{latest['volume_ratio']:.1f}x average\nPrice: {price_str}\nThreshold: {self.threshold}x | Current: {latest['volume_ratio']:.2f}x"
 
         self.mark_triggered()
         return message
@@ -325,14 +329,14 @@ class AdxAlert(AlertCondition):
         # New strong trend starting (ADX crosses above threshold)
         if latest["Strength"] and not prev["Strength"]:
             direction = "BULLISH 📈" if latest["Trend"] == "Bullish" else "BEARISH 📉"
-            message = f"📏 **STRONG {direction} TREND**: {self.symbol} ADX: {latest['ADX']:.1f}\nPrice: {price_str}"
+            message = f"📏 **STRONG {direction} TREND**: {self.symbol} ADX: {latest['ADX']:.1f}\nPrice: {price_str}\nThreshold: {self.threshold} | Current ADX: {latest['ADX']:.1f} | Direction: {latest['Trend']}"
 
         # Trend direction change during strong trend
         elif (
             latest["Strength"] and prev["Strength"] and latest["Trend"] != prev["Trend"]
         ):
             new_direction = "BULLISH 📈" if latest["Trend"] == "Bullish" else "BEARISH 📉"
-            message = f"🔄 **TREND REVERSAL to {new_direction}**: {self.symbol} ADX: {latest['ADX']:.1f}\nPrice: {price_str}"
+            message = f"🔄 **TREND REVERSAL to {new_direction}**: {self.symbol} ADX: {latest['ADX']:.1f}\nPrice: {price_str}\nThreshold: {self.threshold} | Current ADX: {latest['ADX']:.1f} | Previous Direction: {prev['Trend']}"
 
         if message:
             self.mark_triggered()
@@ -361,15 +365,23 @@ class PatternAlert(AlertCondition):
 
         # Simple hammer detection (long lower wick, small body, small/no upper wick)
         if self._is_hammer(candles.iloc[-1]):
-            message = f"🔨 **HAMMER PATTERN**: {self.symbol} Potential reversal\nPrice: {price_str}"
+            body = abs(candles.iloc[-1]["close"] - candles.iloc[-1]["open"])
+            lower_wick = (
+                min(candles.iloc[-1]["open"], candles.iloc[-1]["close"])
+                - candles.iloc[-1]["low"]
+            )
+            upper_wick = candles.iloc[-1]["high"] - max(
+                candles.iloc[-1]["open"], candles.iloc[-1]["close"]
+            )
+            message = f"🔨 **HAMMER PATTERN**: {self.symbol} Potential reversal\nPrice: {price_str}\nBody: {body:.4f} | Lower Wick: {lower_wick:.4f} | Upper Wick: {upper_wick:.4f}"
 
         # Simple evening star (bullish-neutral-bearish sequence at top)
         elif self._is_evening_star(candles.iloc[-3:]):
-            message = f"⭐ **EVENING STAR**: {self.symbol} Potential bearish reversal\nPrice: {price_str}"
+            message = f"⭐ **EVENING STAR**: {self.symbol} Potential bearish reversal\nPrice: {price_str}\nPattern: Bullish → Doji → Bearish | Confidence: High"
 
         # Simple morning star (bearish-neutral-bullish sequence at bottom)
         elif self._is_morning_star(candles.iloc[-3:]):
-            message = f"⭐ **MORNING STAR**: {self.symbol} Potential bullish reversal\nPrice: {price_str}"
+            message = f"⭐ **MORNING STAR**: {self.symbol} Potential bullish reversal\nPrice: {price_str}\nPattern: Bearish → Doji → Bullish | Confidence: High"
 
         # Engulfing pattern
         elif self._is_engulfing(candles.iloc[-2:]):
@@ -378,9 +390,10 @@ class PatternAlert(AlertCondition):
                 if candles.iloc[-1]["close"] > candles.iloc[-1]["open"]
                 else "BEARISH"
             )
-            message = (
-                f"🔄 **{pattern_type} ENGULFING**: {self.symbol}\nPrice: {price_str}"
-            )
+            c1_body = abs(candles.iloc[-2]["close"] - candles.iloc[-2]["open"])
+            c2_body = abs(candles.iloc[-1]["close"] - candles.iloc[-1]["open"])
+            body_ratio = c2_body / c1_body if c1_body > 0 else 0
+            message = f"🔄 **{pattern_type} ENGULFING**: {self.symbol}\nPrice: {price_str}\nBody Ratio: {body_ratio:.2f}x | Confidence: {'High' if body_ratio > 1.5 else 'Medium'}"
 
         if message:
             self.mark_triggered()
@@ -455,10 +468,13 @@ class AlertManager:
 
     def __init__(self):
         self.alerts: Dict[str, List[AlertCondition]] = {}
-        # Track global cooldowns across timeframes - {symbol: {alert_type: last_triggered_time}}
-        self.global_cooldowns: Dict[str, Dict[str, datetime]] = {}
+        # Track global cooldowns across timeframes - {symbol+alert_type: last_triggered_time}
+        # This is a class variable shared across all instances to ensure global cooldown
+        # across different AlertManager instances for different intervals
+        if not hasattr(AlertManager, "global_cooldowns"):
+            AlertManager.global_cooldowns = {}
         # Global cooldown period in minutes (across all timeframes)
-        self.global_cooldown_minutes = 10  # 10 minute global cooldown
+        self.global_cooldown_minutes = 60  # 60 minute global cooldown
 
     def add_alert(self, alert: AlertCondition):
         """Add alert condition for a symbol"""
@@ -480,31 +496,45 @@ class AlertManager:
         if symbol:
             if symbol in self.alerts:
                 del self.alerts[symbol]
-            # Also clear global cooldowns for this symbol
-            if symbol in self.global_cooldowns:
-                del self.global_cooldowns[symbol]
         else:
             self.alerts.clear()
-            self.global_cooldowns.clear()
 
-    def _is_globally_cooled_down(self, symbol: str, alert_type: str) -> bool:
+    def _is_globally_cooled_down(
+        self, symbol: str, alert_type: str, alert_subtype: str = None
+    ) -> bool:
         """Check if an alert type for a symbol is in global cooldown
 
-        Returns True if the alert can trigger (NOT in cooldown)
-        Returns False if the alert should not trigger (IS in cooldown)
+        Parameters:
+        -----------
+        symbol : str
+            Trading pair symbol
+        alert_type : str
+            Alert class name (e.g., 'RsiAlert')
+        alert_subtype : str, optional
+            Specific alert condition (e.g., 'OVERSOLD', 'OVERBOUGHT')
+
+        Returns:
+        --------
+        bool
+            True if the alert can trigger (NOT in cooldown)
+            False if the alert should not trigger (IS in cooldown)
         """
         now = datetime.now()
 
-        # Initialize cooldown tracking for this symbol if needed
-        if symbol not in self.global_cooldowns:
-            self.global_cooldowns[symbol] = {}
+        # Create a unique cooldown key that is independent of interval
+        # The key format is symbol_alertSubtype (e.g., "BTCUSDT_RSI_OVERBOUGHT")
+        cooldown_key = f"{symbol}"
+        if alert_subtype:
+            cooldown_key = f"{symbol}_{alert_subtype}"
+        else:
+            cooldown_key = f"{symbol}_{alert_type}"
 
         # If this alert type has never been triggered, it's not in cooldown
-        if alert_type not in self.global_cooldowns[symbol]:
+        if cooldown_key not in AlertManager.global_cooldowns:
             return True
 
         # Check if cooldown period has passed
-        last_triggered = self.global_cooldowns[symbol][alert_type]
+        last_triggered = AlertManager.global_cooldowns[cooldown_key]
         cooldown_period = timedelta(minutes=self.global_cooldown_minutes)
 
         if now - last_triggered < cooldown_period:
@@ -513,20 +543,27 @@ class AlertManager:
                 (cooldown_period - (now - last_triggered)).total_seconds() / 60
             )
             logger.debug(
-                f"{alert_type} for {symbol} in GLOBAL cooldown ({minutes_remaining} minutes remaining)"
+                f"{cooldown_key} in GLOBAL cooldown ({minutes_remaining} minutes remaining)"
             )
             return False
 
         # Cooldown period has passed
         return True
 
-    def _update_global_cooldown(self, symbol: str, alert_type: str):
+    def _update_global_cooldown(
+        self, symbol: str, alert_type: str, alert_subtype: str = None
+    ):
         """Mark an alert type as triggered for global cooldown tracking"""
-        if symbol not in self.global_cooldowns:
-            self.global_cooldowns[symbol] = {}
+        # Create a unique cooldown key that is independent of interval
+        cooldown_key = f"{symbol}"
+        if alert_subtype:
+            cooldown_key = f"{symbol}_{alert_subtype}"
+        else:
+            cooldown_key = f"{symbol}_{alert_type}"
 
-        self.global_cooldowns[symbol][alert_type] = datetime.now()
-        logger.debug(f"Updated global cooldown for {alert_type} on {symbol}")
+        # Update the shared class variable with the current time
+        AlertManager.global_cooldowns[cooldown_key] = datetime.now()
+        logger.debug(f"Updated global cooldown for {cooldown_key}")
 
     def check_alerts(self, symbol: str, df: pd.DataFrame) -> List[str]:
         """Check all alerts for a symbol and return triggered messages"""
@@ -542,19 +579,28 @@ class AlertManager:
             alert_type = type(alert).__name__
             logger.debug(f"Checking alert type {alert_type} for {symbol}")
 
-            # First check global cooldown (across timeframes)
-            if not self._is_globally_cooled_down(symbol, alert_type):
-                logger.debug(
-                    f"Skipping {alert_type} for {symbol} due to global cooldown"
-                )
-                continue
-
             # Check the alert
             message = alert.check(df)
             if message:
+                # Extract alert subtype from message
+                alert_subtype = None
+                if "**" in message:
+                    parts = message.split("**")
+                    if len(parts) >= 3:
+                        alert_subtype = parts[
+                            1
+                        ].strip()  # Get text between first set of **
+
+                # First check global cooldown (across timeframes)
+                if not self._is_globally_cooled_down(symbol, alert_type, alert_subtype):
+                    logger.debug(
+                        f"Skipping {alert_type} ({alert_subtype}) for {symbol} due to global cooldown"
+                    )
+                    continue
+
                 logger.info(f"Alert triggered: {message}")
-                # Update global cooldown for this alert type
-                self._update_global_cooldown(symbol, alert_type)
+                # Update global cooldown for this alert type and subtype
+                self._update_global_cooldown(symbol, alert_type, alert_subtype)
                 triggered.append(message)
 
         return triggered
