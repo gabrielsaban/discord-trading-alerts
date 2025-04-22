@@ -367,7 +367,7 @@ class AlertScheduler:
                     )
 
                     # Check for triggered alerts
-                    alerts = manager.check_alerts(symbol, df)
+                    alerts = manager.check_alerts(symbol, df, interval)
 
                     if alerts:
                         logger.info(

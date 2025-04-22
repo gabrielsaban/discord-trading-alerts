@@ -34,6 +34,26 @@ A live Discord bot that tracks crypto pairs using real-time Binance data and not
 
 ---
 
+## 🧊 Smart Cooling System
+
+The bot uses an advanced alert cooling system to prevent alert spam while ensuring you don't miss important signals:
+
+### Timeframe-Based Cooldowns
+Different timeframes have appropriate cooldown periods:
+- Short timeframes (1m-5m): 15-30 minute cooldowns
+- Medium timeframes (15m-1h): 1-3 hour cooldowns
+- Long timeframes (4h-1d): 12-48 hour cooldowns
+
+### Signal Strength Prioritization
+Strong signals can override cooldowns when they're significantly more important:
+- Extreme indicator readings (e.g., RSI below 20, ADX above 40)
+- Higher timeframe signals get priority
+- Signals with high strength can break through even if cooldown period hasn't fully elapsed
+
+This ensures you get timely alerts for truly significant market events while avoiding notification fatigue.
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Clone the repo
@@ -109,6 +129,7 @@ discord-trading-alerts/
 - [ ] `/status` command to show countdown timers until next check for each watched pair
 - [X] Decoupled checking frequency - check all timeframes more frequently regardless of their interval
 - [X] Global cooldown system to prevent duplicate alerts across timeframes
+- [X] Smart cooldown system with timeframe-based cooldowns and signal strength prioritization
 - [ ] Alert-based watching - users select specific alerts they want rather than intervals, and the system manages which timeframes to check
 - [ ] Config centralization - move all thresholds, periods, jitter %, etc. into a central YAML/JSON config for runtime tweaks
 - [ ] More customizable alert settings and notification options
