@@ -454,6 +454,10 @@ class AlertManager:
 
     def __init__(self):
         self.alerts: Dict[str, List[AlertCondition]] = {}
+        # Track global cooldowns across timeframes - {symbol: {alert_type: last_triggered_time}}
+        self.global_cooldowns: Dict[str, Dict[str, datetime]] = {}
+        # Global cooldown period in minutes (across all timeframes)
+        self.global_cooldown_minutes = 10  # 10 minute global cooldown
 
     def add_alert(self, alert: AlertCondition):
         """Add alert condition for a symbol"""
@@ -475,8 +479,49 @@ class AlertManager:
         if symbol:
             if symbol in self.alerts:
                 del self.alerts[symbol]
+            # Also clear global cooldowns for this symbol
+            if symbol in self.global_cooldowns:
+                del self.global_cooldowns[symbol]
         else:
             self.alerts.clear()
+            self.global_cooldowns.clear()
+
+    def _is_globally_cooled_down(self, symbol: str, alert_type: str) -> bool:
+        """Check if an alert type for a symbol is in global cooldown
+        
+        Returns True if the alert can trigger (NOT in cooldown)
+        Returns False if the alert should not trigger (IS in cooldown)
+        """
+        now = datetime.now()
+        
+        # Initialize cooldown tracking for this symbol if needed
+        if symbol not in self.global_cooldowns:
+            self.global_cooldowns[symbol] = {}
+            
+        # If this alert type has never been triggered, it's not in cooldown
+        if alert_type not in self.global_cooldowns[symbol]:
+            return True
+            
+        # Check if cooldown period has passed
+        last_triggered = self.global_cooldowns[symbol][alert_type]
+        cooldown_period = timedelta(minutes=self.global_cooldown_minutes)
+        
+        if now - last_triggered < cooldown_period:
+            # Still in cooldown
+            minutes_remaining = int((cooldown_period - (now - last_triggered)).total_seconds() / 60)
+            logger.debug(f"{alert_type} for {symbol} in GLOBAL cooldown ({minutes_remaining} minutes remaining)")
+            return False
+        
+        # Cooldown period has passed
+        return True
+
+    def _update_global_cooldown(self, symbol: str, alert_type: str):
+        """Mark an alert type as triggered for global cooldown tracking"""
+        if symbol not in self.global_cooldowns:
+            self.global_cooldowns[symbol] = {}
+            
+        self.global_cooldowns[symbol][alert_type] = datetime.now()
+        logger.debug(f"Updated global cooldown for {alert_type} on {symbol}")
 
     def check_alerts(self, symbol: str, df: pd.DataFrame) -> List[str]:
         """Check all alerts for a symbol and return triggered messages"""
@@ -488,10 +533,21 @@ class AlertManager:
 
         triggered = []
         for alert in self.alerts[symbol]:
-            logger.debug(f"Checking alert type {type(alert).__name__} for {symbol}")
+            # Get alert type name for global cooldown tracking
+            alert_type = type(alert).__name__
+            logger.debug(f"Checking alert type {alert_type} for {symbol}")
+            
+            # First check global cooldown (across timeframes)
+            if not self._is_globally_cooled_down(symbol, alert_type):
+                logger.debug(f"Skipping {alert_type} for {symbol} due to global cooldown")
+                continue
+                
+            # Check the alert
             message = alert.check(df)
             if message:
                 logger.info(f"Alert triggered: {message}")
+                # Update global cooldown for this alert type
+                self._update_global_cooldown(symbol, alert_type)
                 triggered.append(message)
 
         return triggered
@@ -577,4 +633,4 @@ if __name__ == "__main__":
                 print(f"  {alert}")
 
     # Run tests
-    test_multiple_pairs()
+    # test_multiple_pairs()

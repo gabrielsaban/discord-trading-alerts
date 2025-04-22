@@ -111,7 +111,7 @@ class TradingAlertsBot(discord.Client):
         )
 
         # Send test alerts (temporary)
-        asyncio.create_task(self.send_test_alerts())
+        # asyncio.create_task(self.send_test_alerts())
 
     async def on_reaction_add(self, reaction, user):
         """Handle when users click reactions"""

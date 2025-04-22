@@ -108,7 +108,9 @@ discord-trading-alerts/
 - [X] User-defined indicator thresholds
 - [ ] `/monitor` command to display permanent embeds with live crypto pair prices and current indicator statuses
 - [ ] `/status` command to show countdown timers until next check for each watched pair
-- [ ] Decoupled checking frequency - check all timeframes more frequently regardless of their interval
+- [X] Decoupled checking frequency - check all timeframes more frequently regardless of their interval
+- [X] Global cooldown system to prevent duplicate alerts across timeframes
+- [ ] Alert-based watching - users select specific alerts they want rather than intervals, and the system manages which timeframes to check
 - [ ] Config centralization - move all thresholds, periods, jitter %, etc. into a central YAML/JSON config for runtime tweaks
 - [ ] More customizable alert settings and notification options
 - [ ] Process separation - run the scheduler as a dedicated microservice to maintain alert timing during bot restarts
