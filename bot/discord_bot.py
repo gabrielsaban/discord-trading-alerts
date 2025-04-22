@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 import os
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 import discord
@@ -76,7 +78,11 @@ intents.reactions = True  # Enable reaction events
 # Define the bot client
 class TradingAlertsBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=intents)
+        super().__init__(
+            intents=intents,
+            chunk_guilds_at_startup=False,  # Optimize startup
+            max_messages=None,  # Store all messages the bot sees
+        )
         self.tree = app_commands.CommandTree(self)
         self.db = get_db()
         self.alert_channels: Dict[
@@ -94,14 +100,50 @@ class TradingAlertsBot(discord.Client):
         self.scheduler = get_scheduler(self.send_alert_notification)
         self.scheduler.initialize()
 
-        # Sync commands with Discord
-        await self.tree.sync()
-        self.synced = True
-        logger.info("Command tree synced with Discord")
+        # Explicitly log before syncing to show all command registrations
+        logger.info("Checking registered commands before sync...")
+        commands = self.tree.get_commands()
+        command_names = [cmd.name for cmd in commands]
+        logger.info(f"Commands registered in code: {', '.join(command_names)}")
+
+        # Make sure purge commands are removed
+        for cmd in list(self.tree.get_commands()):
+            if cmd.name in ["purge", "purge_force"]:
+                # Remove any purge commands from the command tree
+                self.tree._remove_command(cmd)
+                logger.info(f"Removed command '{cmd.name}' from command tree")
+
+        # Sync commands with Discord - ensure this happens on startup
+        try:
+            logger.info("Syncing commands with Discord globally...")
+            await self.tree.sync()
+            commands = await self.tree.fetch_commands()
+            logger.info(f"Successfully synced {len(commands)} global commands")
+            command_names = [cmd.name for cmd in commands]
+            logger.info(f"Available commands: {', '.join(command_names)}")
+            self.synced = True
+        except Exception as e:
+            logger.error(f"Error syncing commands: {e}")
+            self.synced = False
+
+        # Start background task to periodically clean up old alert messages
+        self.bg_tasks = []
+        cleanup_task = self.loop.create_task(self.periodic_cleanup_task())
+        self.bg_tasks.append(cleanup_task)
+        logger.info("Started background cleanup task")
 
     async def on_ready(self):
         """Called when the bot has connected to Discord"""
         logger.info(f"{self.user} has connected to Discord!")
+
+        # Sync commands to all joined guilds for immediate availability
+        logger.info(f"{self.user} ready — syncing commands to all joined guilds…")
+        for guild in self.guilds:
+            try:
+                await self.tree.sync(guild=guild)
+                logger.info(f" • synced to {guild.name} ({guild.id})")
+            except Exception as e:
+                logger.error(f" ! failed to sync to {guild.id}: {e}")
 
         # Load alert channels from database
         await self.load_alert_channels()
@@ -117,131 +159,6 @@ class TradingAlertsBot(discord.Client):
 
         # Send test alerts (temporary)
         # asyncio.create_task(self.send_test_alerts())
-
-    async def on_reaction_add(self, reaction, user):
-        """Handle when users click reactions"""
-        # Ignore bot's own reactions
-        if user.id == self.user.id:
-            return
-
-        # Handle different reactions on our alert messages
-        if (
-            reaction.message.id in self.alert_messages
-            and reaction.message.author.id == self.user.id
-        ):
-            # Checkmark reaction - delete the message
-            if reaction.emoji == "✅":
-                # Check if the user is mentioned in the alert
-                # Only allow the user who received the alert to delete it
-                if f"<@{user.id}>" in reaction.message.embeds[0].description:
-                    try:
-                        await reaction.message.delete()
-                        logger.info(
-                            f"Deleted alert message {reaction.message.id} by user request"
-                        )
-                        # Remove from tracked messages
-                        if reaction.message.id in self.alert_messages:
-                            del self.alert_messages[reaction.message.id]
-                    except Exception as e:
-                        logger.error(f"Error deleting message: {e}")
-
-            # Question mark reaction - add explanation
-            elif reaction.emoji == "❓":
-                alert_type = self.alert_messages[reaction.message.id]
-
-                # Get the original embed
-                embed = reaction.message.embeds[0] if reaction.message.embeds else None
-
-                if not embed:
-                    return
-
-                # Check if we already added the explanation (to avoid adding it multiple times)
-                if any(field.name == "Explanation" for field in embed.fields):
-                    return
-
-                # Find matching explanation
-                explanation = None
-                for key, value in ALERT_EXPLANATIONS.items():
-                    if key in alert_type:
-                        explanation = value
-                        break
-
-                if not explanation:
-                    explanation = "This alert suggests a potential trading opportunity. For more details on technical analysis, please research the specific indicator mentioned."
-
-                # Add explanation field
-                embed.add_field(name="Explanation", value=explanation, inline=False)
-
-                # Update the message
-                try:
-                    await reaction.message.edit(embed=embed)
-                    logger.info(
-                        f"Added explanation to alert message {reaction.message.id}"
-                    )
-                except Exception as e:
-                    logger.error(f"Error updating message with explanation: {e}")
-
-    async def on_reaction_remove(self, reaction, user):
-        """Handle when users remove reactions"""
-        # We want to handle all users removing reactions (not just the bot)
-
-        # Check if it's a question mark reaction on one of our alert messages
-        if (
-            reaction.emoji == "❓"
-            and reaction.message.id in self.alert_messages
-            and reaction.message.author.id == self.user.id
-        ):
-            # Check if there are any question mark reactions left from users (excluding the bot)
-            has_user_question_mark = False
-            for r in reaction.message.reactions:
-                if r.emoji == "❓":
-                    # Get detailed list of users who reacted
-                    users = [u async for u in r.users()]
-                    # Check if any non-bot users have the reaction
-                    if any(u.id != self.user.id for u in users):
-                        has_user_question_mark = True
-                        break
-
-            # If no more user question mark reactions, remove the explanation
-            if not has_user_question_mark:
-                # Get the original embed
-                embed = reaction.message.embeds[0] if reaction.message.embeds else None
-
-                if not embed:
-                    return
-
-                # Find and remove the Explanation field
-                new_fields = []
-                for field in embed.fields:
-                    if field.name != "Explanation":
-                        new_fields.append(field)
-
-                # If no fields were removed, no need to update
-                if len(new_fields) == len(embed.fields):
-                    return
-
-                # Create a new embed with the same properties but without the explanation field
-                new_embed = discord.Embed(
-                    title=embed.title,
-                    description=embed.description,
-                    color=embed.color,
-                    timestamp=embed.timestamp,
-                )
-
-                # Add remaining fields
-                for field in new_fields:
-                    new_embed.add_field(
-                        name=field.name, value=field.value, inline=field.inline
-                    )
-
-                # Update the message
-                try:
-                    await reaction.message.edit(embed=new_embed)
-                    logger.info(
-                        f"Removed explanation from alert message {reaction.message.id}"
-                    )
-                except Exception as e:
-                    logger.error(f"Error updating message to remove explanation: {e}")
 
     async def on_guild_join(self, guild):
         """Called when the bot joins a new guild (server)"""
@@ -305,10 +222,10 @@ class TradingAlertsBot(discord.Client):
             inline=False,
         )
 
-        # embed.set_footer(text="React with 📌 to pin this message for future reference")
+        embed.set_footer(text="React with 📌 to pin this message for future reference")
 
         message = await channel.send(embed=embed)
-        # await message.add_reaction("📌")  # Pin reaction
+        await message.add_reaction("📌")  # Pin reaction
 
     async def send_alert_notification(self, user_id: str, alerts: List[str]):
         """Send alert notifications to the specified user"""
@@ -352,22 +269,37 @@ class TradingAlertsBot(discord.Client):
                             else "Unknown"
                         )
 
-                        # Reformat the alert to match the new style
-                        reformatted_alert = alert
+                        # Get interval from the alert message using a parameter
+                        # Format should be: alert_message | interval
+                        alert_parts = alert.split("|")
+                        interval = "Unknown"
+                        if len(alert_parts) >= 2:
+                            # Extract interval from the second part
+                            interval = alert_parts[1].strip()
+                        else:
+                            # Fallback to database lookup
+                            watchlist = self.db.get_user_watchlist(user_id)
+                            for item in watchlist:
+                                if item["symbol"] == symbol:
+                                    interval = item["interval"]
+                                    break
+
+                        # Use only the alert message part without the interval
+                        clean_alert = alert_parts[0].strip()
 
                         # Add user mention and handle the pipe separator
                         user_mention = f"<@{user_id}>"
-                        if " | Price: " in reformatted_alert:
-                            parts = reformatted_alert.split(" | Price: ")
+                        if " | Price: " in clean_alert:
+                            parts = clean_alert.split(" | Price: ")
                             reformatted_alert = (
                                 f"{user_mention}\n{parts[0]}\nPrice: {parts[1]}"
                             )
                         else:
-                            reformatted_alert = f"{user_mention}\n{reformatted_alert}"
+                            reformatted_alert = f"{user_mention}\n{clean_alert}"
 
-                        # Create embed
+                        # Create embed with interval in title
                         embed = discord.Embed(
-                            title=f"⚠️ Alert: {symbol}",
+                            title=f"⚠️ Alert: {symbol} ({interval})",
                             description=reformatted_alert,
                             color=self._get_color_for_alert(alert),
                         )
@@ -379,7 +311,7 @@ class TradingAlertsBot(discord.Client):
                         try:
                             message = await current_channel.send(embed=embed)
                             logger.info(
-                                f"Sent alert for {symbol} to channel {current_channel.id}"
+                                f"Sent alert for {symbol} ({interval}) to channel {current_channel.id}"
                             )
 
                             # Add reactions: checkmark to delete and question mark for explanation
@@ -524,6 +456,7 @@ class TradingAlertsBot(discord.Client):
 
         # Define example alerts for all types
         symbol = "BTCUSDT"
+        interval = "15m"  # Use 15m as test interval
         price = "42,069.42"
         user_mention = f"<@{user_id}>"
         test_alerts = [
@@ -565,9 +498,9 @@ class TradingAlertsBot(discord.Client):
                     alert.split(":")[1].split()[0] if ":" in alert else "Unknown"
                 )
 
-                # Create embed
+                # Create embed with interval
                 embed = discord.Embed(
-                    title=f"⚠️ Alert: {alert_symbol}",
+                    title=f"⚠️ Alert: {alert_symbol} *({interval})*",
                     description=alert,
                     color=self._get_color_for_alert(alert),
                 )
@@ -579,7 +512,8 @@ class TradingAlertsBot(discord.Client):
                 message = await channel.send(embed=embed)
                 logger.info(f"Sent test alert: {alert[:30]}...")
 
-                # Add question mark reaction for explanation
+                # Add reactions: checkmark to delete and question mark for explanation
+                await message.add_reaction("✅")
                 await message.add_reaction("❓")
 
                 # Extract alert type for explanations
@@ -599,6 +533,387 @@ class TradingAlertsBot(discord.Client):
                 logger.error(f"Error sending test alert: {e}")
 
         logger.info("Finished sending all test alerts")
+
+    async def periodic_cleanup_task(self):
+        """Background task to periodically clean up old alert messages"""
+        # Wait until the bot is ready before starting cleanup
+        await self.wait_until_ready()
+        logger.info("Periodic cleanup task ready")
+
+        # Clean up every 4 hours - adjust this interval as needed
+        CLEANUP_INTERVAL = 4 * 60 * 60  # 4 hours in seconds
+
+        while not self.is_closed():
+            try:
+                # Get current time for age calculations
+                now = datetime.utcnow()
+
+                # Track total messages cleaned up
+                total_cleaned = 0
+
+                # Check each channel for alert messages older than 12 hours
+                if self.alert_channels:
+                    for user_id, channels in self.alert_channels.items():
+                        for channel in channels:
+                            try:
+                                # Try to get a fresh channel reference
+                                current_channel = channel
+                                if hasattr(self, "get_channel"):
+                                    fetched_channel = self.get_channel(channel.id)
+                                    if fetched_channel is not None:
+                                        current_channel = fetched_channel
+
+                                # Only check a reasonable number of messages to avoid rate limits
+                                messages_to_delete = []
+
+                                async for message in current_channel.history(limit=30):
+                                    # Skip messages less than 12 hours old
+                                    message_age = now - message.created_at.replace(
+                                        tzinfo=None
+                                    )
+                                    if (
+                                        message_age.total_seconds() < 12 * 60 * 60
+                                    ):  # 12 hours
+                                        continue
+
+                                    # Check if this is one of our alert messages
+                                    if (
+                                        message.author.id == self.user.id
+                                        and message.embeds
+                                        and len(message.embeds) > 0
+                                        and message.embeds[0].title
+                                        and "Alert:" in message.embeds[0].title
+                                    ):
+                                        messages_to_delete.append(message)
+
+                                # Delete old messages
+                                for message in messages_to_delete:
+                                    try:
+                                        await message.delete()
+                                        total_cleaned += 1
+
+                                        # Remove from tracked messages if present
+                                        if message.id in self.alert_messages:
+                                            del self.alert_messages[message.id]
+
+                                        # Add a longer delay to avoid rate limits (Discord's rate limit is 1 per second)
+                                        await asyncio.sleep(1.1)
+                                    except Exception as e:
+                                        logger.debug(f"Error deleting old message: {e}")
+
+                                if messages_to_delete:
+                                    logger.info(
+                                        f"Auto-cleaned {len(messages_to_delete)} old alert messages from {current_channel.id}"
+                                    )
+
+                            except Exception as e:
+                                logger.error(
+                                    f"Error in periodic cleanup for channel: {e}"
+                                )
+
+                if total_cleaned > 0:
+                    logger.info(
+                        f"Periodic cleanup complete: deleted {total_cleaned} old alert messages"
+                    )
+
+            except Exception as e:
+                logger.error(f"Error in periodic cleanup task: {e}")
+
+            # Wait for next cleanup interval
+            await asyncio.sleep(CLEANUP_INTERVAL)
+
+    async def on_raw_reaction_remove(self, payload):
+        """Handle when users remove reactions, even if the message isn't in cache"""
+        # Skip if this is our own reaction being removed
+        if payload.user_id == self.user.id:
+            return
+
+        logger.info(
+            f"Raw reaction remove: {payload.emoji.name} by user {payload.user_id} on message {payload.message_id}"
+        )
+
+        # We only care about question mark reactions on alert messages
+        if payload.emoji.name != "❓":
+            return
+
+        # Get the channel and message
+        try:
+            channel = self.get_channel(payload.channel_id)
+            if not channel:
+                logger.warning(f"Channel {payload.channel_id} not found")
+                return
+
+            # Get the message if we need to
+            message = await channel.fetch_message(payload.message_id)
+            if not message or message.author.id != self.user.id:
+                logger.warning(
+                    f"Message {payload.message_id} not found or not from bot"
+                )
+                return
+
+            # Check if this is an alert message by examining its embed
+            is_alert = (
+                message.embeds
+                and len(message.embeds) > 0
+                and message.embeds[0].title
+                and "Alert:" in message.embeds[0].title
+            )
+
+            if not is_alert:
+                return
+
+            # Check if there are any question mark reactions left from users (excluding the bot)
+            has_user_question_mark = False
+
+            # Check all reactions on the message
+            for reaction in message.reactions:
+                if reaction.emoji == "❓":
+                    # Get all users who reacted
+                    users = [u async for u in reaction.users()]
+                    non_bot_users = [u for u in users if u.id != self.user.id]
+                    logger.info(
+                        f"Question mark reaction has {len(users)} users ({len(non_bot_users)} non-bot)"
+                    )
+
+                    # If we have any non-bot users, keep the explanation
+                    if non_bot_users:
+                        has_user_question_mark = True
+                        break
+
+            # If no more user question mark reactions, remove the explanation
+            if not has_user_question_mark:
+                logger.info(
+                    f"No more user question mark reactions, removing explanation"
+                )
+
+                # Get the original embed
+                embed = message.embeds[0] if message.embeds else None
+
+                if not embed:
+                    logger.warning("No embed found in message")
+                    return
+
+                # Find and remove the Explanation field
+                new_fields = []
+                has_explanation = False
+
+                for field in embed.fields:
+                    if field.name != "Explanation":
+                        new_fields.append(field)
+                    else:
+                        has_explanation = True
+
+                logger.info(
+                    f"Found explanation field: {has_explanation}, fields before: {len(embed.fields)}, after: {len(new_fields)}"
+                )
+
+                # If no fields were removed, no need to update
+                if len(new_fields) == len(embed.fields):
+                    logger.info("No explanation field to remove")
+                    return
+
+                # Create a new embed with the same properties but without the explanation field
+                new_embed = discord.Embed(
+                    title=embed.title,
+                    description=embed.description,
+                    color=embed.color,
+                    timestamp=embed.timestamp,
+                )
+
+                # Add remaining fields
+                for field in new_fields:
+                    new_embed.add_field(
+                        name=field.name, value=field.value, inline=field.inline
+                    )
+
+                # Copy the footer if it exists
+                if embed.footer:
+                    new_embed.set_footer(
+                        text=embed.footer.text, icon_url=embed.footer.icon_url
+                    )
+
+                # Update the message
+                try:
+                    await message.edit(embed=new_embed)
+                    logger.info(f"Removed explanation from alert message {message.id}")
+                except Exception as e:
+                    logger.error(f"Error updating message to remove explanation: {e}")
+
+        except Exception as e:
+            logger.error(f"Error handling raw reaction remove: {e}")
+
+    async def on_raw_reaction_add(self, payload):
+        """Handle when users add reactions, even if the message isn't in cache"""
+        # Skip if this is our own reaction being added
+        if payload.user_id == self.user.id:
+            return
+
+        logger.info(
+            f"Raw reaction add: {payload.emoji.name} by user {payload.user_id} on message {payload.message_id}"
+        )
+
+        # Get the channel and message
+        try:
+            channel = self.get_channel(payload.channel_id)
+            if not channel:
+                logger.warning(f"Channel {payload.channel_id} not found")
+                return
+
+            # Get the message
+            message = await channel.fetch_message(payload.message_id)
+            if not message or message.author.id != self.user.id:
+                logger.warning(
+                    f"Message {payload.message_id} not found or not from bot"
+                )
+                return
+
+            # Handle pin reaction on welcome message
+            if (
+                payload.emoji.name == "📌"
+                and message.embeds
+                and "Crypto Trading Alerts Bot" in message.embeds[0].title
+            ):
+                # Get user and channel permissions
+                user = await self.fetch_user(payload.user_id)
+                channel_permissions = channel.permissions_for(user)
+                bot_permissions = channel.permissions_for(message.guild.me)
+
+                # Check if the bot has permissions to pin
+                if not bot_permissions.manage_messages:
+                    try:
+                        # Inform about missing permissions
+                        await channel.send(
+                            f"I don't have permission to pin messages. Please give me the 'Manage Messages' permission.",
+                            delete_after=10,
+                        )
+                    except Exception:
+                        pass
+                    return
+
+                # Only server mods/admins or users with pin permissions can pin the message
+                if (
+                    channel_permissions.manage_messages
+                    or channel_permissions.administrator
+                ):
+                    try:
+                        # Pin the message
+                        await message.pin()
+                        logger.info(f"Pinned welcome message in channel {channel.id}")
+
+                        # Remove the pin reaction to indicate it's been pinned
+                        await message.remove_reaction("📌", user)
+                    except discord.Forbidden:
+                        logger.error("Bot doesn't have permission to pin messages")
+                    except Exception as e:
+                        logger.error(f"Error pinning message: {e}")
+                else:
+                    # Let user know they don't have permission to pin
+                    try:
+                        await channel.send(
+                            f"<@{payload.user_id}> You don't have permission to pin messages in this channel.",
+                            delete_after=5,
+                        )
+                        # Remove their reaction
+                        await message.remove_reaction("📌", user)
+                    except Exception:
+                        pass
+
+                return  # Welcome messages aren't alert messages, so return here
+
+            # Check if this is an alert message by examining its embed
+            is_alert = (
+                message.embeds
+                and len(message.embeds) > 0
+                and message.embeds[0].title
+                and "Alert:" in message.embeds[0].title
+            )
+
+            if not is_alert:
+                return
+
+            # Handle checkmark reaction (delete alert)
+            if payload.emoji.name == "✅":
+                # Check if the user is mentioned in the alert
+                # Only allow the user who received the alert to delete it
+                if (
+                    message.embeds[0].description
+                    and f"<@{payload.user_id}>" in message.embeds[0].description
+                ):
+                    try:
+                        await message.delete()
+                        logger.info(
+                            f"Deleted alert message {message.id} by user request"
+                        )
+                        # Remove from tracked messages if it's there
+                        if message.id in self.alert_messages:
+                            del self.alert_messages[message.id]
+                    except Exception as e:
+                        logger.error(f"Error deleting message: {e}")
+
+            # Handle question mark reaction (add explanation)
+            elif payload.emoji.name == "❓":
+                # Check if we already added the explanation (to avoid adding it multiple times)
+                if any(
+                    field.name == "Explanation" for field in message.embeds[0].fields
+                ):
+                    logger.info(f"Explanation already exists, not adding again")
+                    return
+
+                # Extract alert type from message content to find the right explanation
+                alert_type = None
+                embed_description = message.embeds[0].description
+
+                if embed_description and "**" in embed_description:
+                    # Try to extract the alert type from between ** markers
+                    parts = embed_description.split("**")
+                    if len(parts) >= 3:
+                        alert_type = parts[
+                            1
+                        ].strip()  # Get text between first set of **
+
+                # Find matching explanation
+                explanation = None
+                if alert_type:
+                    for key, value in ALERT_EXPLANATIONS.items():
+                        if key in alert_type:
+                            explanation = value
+                            break
+
+                if not explanation:
+                    explanation = "This alert suggests a potential trading opportunity. For more details on technical analysis, please research the specific indicator mentioned."
+
+                # Add explanation field
+                embed = message.embeds[0]
+                embed.add_field(name="Explanation", value=explanation, inline=False)
+
+                # Update the message
+                try:
+                    await message.edit(embed=embed)
+                    logger.info(f"Added explanation to alert message {message.id}")
+
+                    # Make sure the bot also has a reaction to keep the explanation
+                    # Check if the bot already has a reaction
+                    bot_has_reaction = False
+                    for r in message.reactions:
+                        if r.emoji == "❓":
+                            async for u in r.users():
+                                if u.id == self.user.id:
+                                    bot_has_reaction = True
+                                    break
+                            if bot_has_reaction:
+                                break
+
+                    # Add bot's reaction if needed
+                    if not bot_has_reaction:
+                        await message.add_reaction("❓")
+                        logger.info(
+                            f"Added bot's question mark reaction to keep explanation visible"
+                        )
+                except Exception as e:
+                    logger.error(f"Error updating message with explanation: {e}")
+
+        except Exception as e:
+            logger.error(f"Error handling raw reaction add: {e}")
 
 
 # Create bot instance
@@ -1143,12 +1458,92 @@ async def help_command(interaction: discord.Interaction):
     )
 
 
+# Add a sync command that only the bot owner can use
+@bot.tree.command(
+    name="sync", description="Sync slash commands with Discord (owner only)"
+)
+@app_commands.describe(
+    scope="Sync scope: 'global' (all servers) or 'guild' (current server only)",
+    clear_commands="Delete all commands before syncing new ones",
+)
+async def sync_command(
+    interaction: discord.Interaction,
+    scope: Literal["global", "guild"] = "global",
+    clear_commands: bool = False,
+):
+    """Sync all slash commands with Discord"""
+    # Check if the user is the bot owner
+    bot_owner_id = "153242761531752449"  # Your Discord ID
+    if str(interaction.user.id) != bot_owner_id:
+        await interaction.response.send_message(
+            "Only the bot owner can use this command.", ephemeral=True
+        )
+        return
+
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        # Filter out purge commands from app commands
+        for cmd in bot.tree.get_commands():
+            if cmd.name in ["purge", "purge_force"]:
+                # Remove any purge commands from the command tree
+                bot.tree._remove_command(cmd)
+                logger.info(f"Removed command '{cmd.name}' from command tree")
+
+        # Clear commands if requested
+        if clear_commands:
+            if scope == "global":
+                bot.tree.clear_commands(guild=None)
+                logger.info("Cleared all global commands")
+            else:
+                bot.tree.clear_commands(guild=interaction.guild)
+                logger.info(f"Cleared all commands in guild {interaction.guild.id}")
+
+        # Sync commands
+        if scope == "global":
+            # Use copy=False to ensure we're not just copying guild commands globally
+            await bot.tree.sync(guild=None)
+            commands = await bot.tree.fetch_commands()
+            logger.info(
+                f"Synced {len(commands)} global commands: {[cmd.name for cmd in commands]}"
+            )
+
+            command_list = "\n".join(
+                [f"/{cmd.name} - {cmd.description}" for cmd in commands]
+            )
+            await interaction.followup.send(
+                f"✅ Synced {len(commands)} global commands with Discord!\n\nAvailable commands:\n{command_list}",
+                ephemeral=True,
+            )
+        else:
+            # Guild-specific sync
+            await bot.tree.sync(guild=interaction.guild)
+            commands = await bot.tree.fetch_commands(guild=interaction.guild)
+            logger.info(
+                f"Synced {len(commands)} guild commands for {interaction.guild.name}: {[cmd.name for cmd in commands]}"
+            )
+
+            command_list = "\n".join(
+                [f"/{cmd.name} - {cmd.description}" for cmd in commands]
+            )
+            await interaction.followup.send(
+                f"✅ Synced {len(commands)} commands to this server only!\n\nAvailable commands:\n{command_list}",
+                ephemeral=True,
+            )
+    except Exception as e:
+        logger.error(f"Error syncing commands: {e}")
+        await interaction.followup.send(
+            f"❌ Error syncing commands: {str(e)}\n\nCheck logs for details.",
+            ephemeral=True,
+        )
+
+
 # Command error handler
 @bot.tree.error
 async def on_app_command_error(
     interaction: discord.Interaction, error: app_commands.AppCommandError
 ):
-    """Handle errors from application commands"""
+    """Handle errors from slash commands"""
     if isinstance(error, app_commands.CommandOnCooldown):
         await interaction.response.send_message(
             f"This command is on cooldown. Try again in {error.retry_after:.1f} seconds.",
@@ -1163,6 +1558,76 @@ async def on_app_command_error(
             f"An error occurred: {error}", ephemeral=True
         )
         logger.error(f"Command error: {error}")
+
+
+# Add cleanup command
+@bot.tree.command(
+    name="cleanup", description="Delete old alert messages from the channel"
+)
+@app_commands.describe(count="Maximum number of messages to check (default: 50)")
+@app_commands.checks.cooldown(1, 30)  # Limit usage to once every 30 seconds
+async def cleanup_command(interaction: discord.Interaction, count: int = 50):
+    """Clean up old alert messages from the channel"""
+    await interaction.response.defer(ephemeral=True)
+
+    if count < 1 or count > 100:
+        await interaction.followup.send(
+            "Count must be between 1 and 100.", ephemeral=True
+        )
+        return
+
+    channel = interaction.channel
+    user_id = str(interaction.user.id)
+
+    # Track how many messages were deleted
+    deleted_count = 0
+
+    # Record the time when the command was called
+    command_time = datetime.now(timezone.utc)
+
+    try:
+        # Only check messages in this channel
+        messages_checked = 0
+        async for message in channel.history(limit=count):
+            messages_checked += 1
+
+            # Skip messages created after the command was called
+            if message.created_at > command_time:
+                continue
+
+            # Check if this is our alert message
+            is_alert = (
+                message.author.id == bot.user.id
+                and message.embeds
+                and len(message.embeds) > 0
+                and message.embeds[0].title
+                and "Alert:" in message.embeds[0].title
+            )
+
+            if is_alert:
+                try:
+                    await message.delete()
+                    deleted_count += 1
+
+                    # If in our tracked messages, remove it
+                    if message.id in bot.alert_messages:
+                        del bot.alert_messages[message.id]
+
+                    # Add a longer delay to avoid rate limits (Discord's rate limit is 1 per second)
+                    await asyncio.sleep(1.1)
+                except Exception as e:
+                    logger.error(f"Error deleting message during cleanup: {e}")
+
+        # Send confirmation
+        await interaction.followup.send(
+            f"✅ Cleanup complete! Checked {messages_checked} messages and deleted {deleted_count} alert messages.",
+            ephemeral=True,
+        )
+    except Exception as e:
+        logger.error(f"Error during cleanup command: {e}")
+        await interaction.followup.send(
+            f"❌ Error during cleanup: {str(e)}", ephemeral=True
+        )
 
 
 # Run the bot
