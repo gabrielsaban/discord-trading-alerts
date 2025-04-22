@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import platform
@@ -5,6 +6,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 
 from bot.db import get_db
 from bot.discord_bot import bot, run_bot
@@ -24,28 +26,94 @@ os.makedirs("data", exist_ok=True)
 
 # Setup graceful shutdown
 def signal_handler(sig, frame):
-    """Handle shutdown signals gracefully"""
+    """Handle graceful shutdown on signals like CTRL+C"""
     logger.info(f"Received signal {sig}, shutting down gracefully...")
 
-    # Stop the scheduler if it's running
-    scheduler = get_scheduler()
-    if scheduler and scheduler.running:
-        logger.info("Stopping alert scheduler...")
-        scheduler.stop()
+    # Track shutdown status
+    components_shutdown = {
+        "scheduler": False,
+        "db": False,
+        "bot_connection": False,
+    }
 
-    # Close database connections
-    logger.info("Closing database connections...")
-    db = get_db()
-    db.close()
+    # Flag to track if we need to force exit
+    force_exit_needed = False
 
-    # Close Discord bot if running
-    if bot and bot.is_ready():
-        logger.info("Logging out from Discord...")
-        # Note: We'd ideally do bot.close() here, but this would need
-        # to be handled in the event loop - discord.py will handle this anyway
+    try:
+        # 1. Stop the scheduler first since it depends on the bot for sending alerts
+        scheduler = get_scheduler()
+        if scheduler and scheduler.running:
+            logger.info("Stopping alert scheduler...")
+            try:
+                scheduler.stop()
+                components_shutdown["scheduler"] = True
+                logger.info("Alert scheduler stopped successfully")
+            except Exception as e:
+                logger.error(f"Error stopping scheduler: {e}")
+                logger.debug(traceback.format_exc())
+        else:
+            logger.info("Scheduler not running or not initialized")
+            components_shutdown["scheduler"] = True
 
-    logger.info("Shutdown complete")
-    sys.exit(0)
+        # 2. Close database connections
+        logger.info("Closing database connections...")
+        try:
+            db = get_db()
+            db.close()
+            components_shutdown["db"] = True
+            logger.info("Database connections closed successfully")
+        except Exception as e:
+            logger.error(f"Error closing database: {e}")
+            logger.debug(traceback.format_exc())
+
+        # 3. Properly close the bot connection
+        if bot and bot.is_ready():
+            logger.info("Closing Discord connection...")
+            try:
+                # Don't try to wait for the close coroutine
+                # Discord.py will handle this internally when the process exits
+                asyncio.run_coroutine_threadsafe(bot.close(), bot.loop)
+                logger.info("Discord bot shutdown initiated")
+                components_shutdown["bot_connection"] = True
+            except Exception as e:
+                logger.error(f"Error while closing Discord connection: {e}")
+                logger.debug(traceback.format_exc())
+                force_exit_needed = True
+        else:
+            logger.info("Bot not ready, skipping connection cleanup")
+            components_shutdown[
+                "bot_connection"
+            ] = True  # Mark as done since nothing to do
+
+    except Exception as e:
+        logger.error(f"Unexpected error during shutdown process: {e}")
+        logger.debug(traceback.format_exc())
+        force_exit_needed = True
+
+    # Log shutdown status
+    logger.info(f"Shutdown status: {components_shutdown}")
+
+    # Final shutdown message
+    if all(components_shutdown.values()):
+        logger.info("All components shut down successfully")
+    else:
+        failed_components = [k for k, v in components_shutdown.items() if not v]
+        logger.warning(
+            f"Some components failed to shut down properly: {failed_components}"
+        )
+        force_exit_needed = True
+
+    # Exit the process
+    if force_exit_needed:
+        logger.warning("Forcing exit due to shutdown issues")
+        # Use a short delay and then exit to allow logs to flush
+        time.sleep(0.5)
+        os._exit(1)
+    else:
+        logger.info("Clean shutdown initiated")
+        # Use a short delay and then exit to allow logs to flush
+        time.sleep(0.5)
+        os._exit(0)
 
 
 def test_shutdown():
@@ -118,4 +186,5 @@ if __name__ == "__main__":
             signal_handler(signal.SIGINT, None)
         except Exception as e:
             logger.error(f"Error running bot: {e}")
+            logger.debug(traceback.format_exc())
             sys.exit(1)
