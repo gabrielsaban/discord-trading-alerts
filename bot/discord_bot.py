@@ -289,11 +289,22 @@ class TradingAlertsBot(discord.Client):
 
                         # Add user mention and handle the pipe separator
                         user_mention = f"<@{user_id}>"
-                        if " | Price: " in clean_alert:
-                            parts = clean_alert.split(" | Price: ")
-                            reformatted_alert = (
-                                f"{user_mention}\n{parts[0]}\nPrice: {parts[1]}"
-                            )
+                        if "\nPrice: " in clean_alert:
+                            parts = clean_alert.split("\nPrice: ")
+                            alert_header = parts[0]
+                            price_and_details = parts[1]
+
+                            # Check if there are detailed threshold values after the price
+                            if "\n" in price_and_details:
+                                price_part, details_part = price_and_details.split(
+                                    "\n", 1
+                                )
+                                reformatted_alert = f"{user_mention}\n{alert_header}\nPrice: {price_part}\n{details_part}"
+                                logger.debug(
+                                    f"Alert with detailed threshold info: {details_part}"
+                                )
+                            else:
+                                reformatted_alert = f"{user_mention}\n{alert_header}\nPrice: {price_and_details}"
                         else:
                             reformatted_alert = f"{user_mention}\n{clean_alert}"
 
@@ -1456,6 +1467,104 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(
         "Help information sent to the channel!", ephemeral=True
     )
+
+
+# Guide command for optimal timeframes
+@bot.tree.command(
+    name="guide",
+    description="Get guidance on the best timeframes for different indicators",
+)
+@app_commands.checks.cooldown(1, 30)  # Limit usage to once every 30 seconds
+async def guide_command(interaction: discord.Interaction):
+    """Show a guide for optimal indicator timeframes"""
+    await interaction.response.defer()
+
+    # First embed with first set of indicators
+    embed = discord.Embed(
+        title="📊 Optimal Timeframes for Trading Indicators",
+        description="Different indicators work best at different timeframes. Here's a guide to help you choose the right settings:",
+        color=discord.Color.blue(),
+    )
+
+    # RSI Section
+    embed.add_field(
+        name="🔴 RSI (Relative Strength Index)",
+        value="• **Short-term:** 5m, 15m, 30m - Good for scalping and quick trades\n"
+        "• **Medium-term:** 1h, 4h - Most commonly used for day trading\n"
+        "• **Long-term:** Daily, Weekly - For position trading and major trend reversals",
+        inline=False,
+    )
+
+    # MACD Section
+    embed.add_field(
+        name="📈 MACD (Moving Average Convergence Divergence)",
+        value="• **Medium-term:** 1h, 4h - Best for catching trend changes\n"
+        "• **Long-term:** Daily - Excellent for identifying significant shifts\n"
+        "• Not recommended for very short timeframes due to noise",
+        inline=False,
+    )
+
+    # EMA Section
+    embed.add_field(
+        name="📉 EMA Crossovers",
+        value="• **Short-term:** 15m, 30m - For quick trend identification\n"
+        "• **Medium-term:** 1h, 4h - Most reliable for avoiding false signals\n"
+        "• **Long-term:** Daily - For major trend shifts",
+        inline=False,
+    )
+
+    # Bollinger Bands Section
+    embed.add_field(
+        name="🔄 Bollinger Bands",
+        value="• **Short-term:** 15m, 30m - Good for volatility-based scalping\n"
+        "• **Medium-term:** 1h, 4h - Best for identifying squeezes and breakouts\n"
+        "• Works well across most timeframes as it adapts to volatility",
+        inline=False,
+    )
+
+    # Second embed with remaining indicators
+    embed2 = discord.Embed(color=discord.Color.blue())
+
+    # Volume Spikes Section
+    embed2.add_field(
+        name="📊 Volume Spikes",
+        value="• **Short-term:** 5m, 15m, 30m - Useful for catching sudden interest\n"
+        "• **Medium-term:** 1h, 4h - More reliable signals with less noise\n"
+        "• **Long-term:** Daily - For identifying major market events",
+        inline=False,
+    )
+
+    # ADX Section
+    embed2.add_field(
+        name="📏 ADX (Average Directional Index)",
+        value="• **Medium-term:** 1h, 4h - Ideal for trend strength measurement\n"
+        "• **Long-term:** Daily - Best for identifying significant trends\n"
+        "• Not recommended for very short timeframes",
+        inline=False,
+    )
+
+    # Candlestick Patterns Section
+    embed2.add_field(
+        name="🕯️ Candlestick Patterns",
+        value="• **Short-term:** 15m, 30m - Can work but more prone to false signals\n"
+        "• **Medium-term:** 1h, 4h - Optimal balance of signal quality and timeliness\n"
+        "• **Long-term:** Daily - Most reliable with strongest predictive value",
+        inline=False,
+    )
+
+    # General Guidelines Section
+    embed2.add_field(
+        name="💡 General Guidelines",
+        value='• The 4-hour timeframe is often the "sweet spot" for most indicators\n'
+        "• Shorter timeframes generate more signals but with lower reliability\n"
+        "• Longer timeframes generate fewer but more reliable signals\n"
+        "• For most traders, focusing on 1h, 4h, and daily provides the best balance\n"
+        "• Consider looking for confluence across multiple timeframes for the strongest signals",
+        inline=False,
+    )
+
+    # Send both embeds
+    await interaction.followup.send(embeds=[embed, embed2])
 
 
 # Add a sync command that only the bot owner can use
