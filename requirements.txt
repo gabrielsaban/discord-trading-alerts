@@ -4,6 +4,7 @@ pandas-ta==0.3.14b0
 requests==2.31.0
 python-dotenv==1.0.0
 apscheduler==3.10.4
+setuptools>=65.5.0
 
 # Testing and linting
 pytest==7.4.3
