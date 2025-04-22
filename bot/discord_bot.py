@@ -41,11 +41,34 @@ VALID_INTERVALS = [
     "1d",
 ]
 
+# Dictionary of alert explanations
+ALERT_EXPLANATIONS = {
+    "RSI OVERSOLD": "The Relative Strength Index shows the asset may be oversold (below 30). This could signal a potential buying opportunity as the price might rebound soon.",
+    "RSI OVERBOUGHT": "The Relative Strength Index shows the asset may be overbought (above 70). This could signal a potential selling opportunity as the price might drop soon.",
+    "MACD BULLISH CROSS": "The Moving Average Convergence Divergence line has crossed above the signal line. This suggests upward momentum may be building, potentially indicating a good time to buy.",
+    "MACD BEARISH CROSS": "The Moving Average Convergence Divergence line has crossed below the signal line. This suggests downward momentum may be building, potentially indicating a good time to sell.",
+    "EMA BULLISH CROSS": "A shorter-term Exponential Moving Average has crossed above a longer-term EMA. This often signals the beginning of an uptrend and could be a buying opportunity.",
+    "EMA BEARISH CROSS": "A shorter-term Exponential Moving Average has crossed below a longer-term EMA. This often signals the beginning of a downtrend and could be a selling opportunity.",
+    "UPPER BB BREAKOUT": "Price has broken above the upper Bollinger Band. This suggests strong upward momentum, but the asset might be becoming overbought.",
+    "LOWER BB BREAKOUT": "Price has broken below the lower Bollinger Band. This suggests strong downward momentum, but the asset might be becoming oversold.",
+    "BOLLINGER SQUEEZE": "The Bollinger Bands have narrowed significantly. This usually precedes a period of high volatility - a big price move may be coming soon, but the direction is uncertain.",
+    "VOLUME SPIKE": "Trading volume has suddenly increased well above average. This suggests strong interest in the asset and often precedes significant price movements.",
+    "VOLUME Z-SCORE SPIKE": "Trading volume has statistically significant deviation from the norm. This indicates unusual market activity that may lead to price changes.",
+    "STRONG BULLISH TREND": "The Average Directional Index (ADX) indicates a strong upward trend is developing. Consider buying as prices may continue rising.",
+    "STRONG BEARISH TREND": "The Average Directional Index (ADX) indicates a strong downward trend is developing. Consider selling as prices may continue falling.",
+    "TREND REVERSAL to BULLISH": "The trend appears to be changing from downward to upward. This may be an opportunity to buy at the beginning of a new uptrend.",
+    "TREND REVERSAL to BEARISH": "The trend appears to be changing from upward to downward. This may be an opportunity to sell before a potential downtrend.",
+    "HAMMER PATTERN": "A candlestick pattern showing potential trend reversal from downward to upward. The market may have rejected lower prices, suggesting buying support.",
+    "EVENING STAR": "A bearish reversal pattern that appears at the top of an uptrend. It suggests the upward momentum is weakening and prices may start falling.",
+    "MORNING STAR": "A bullish reversal pattern that appears at the bottom of a downtrend. It suggests the downward momentum is weakening and prices may start rising.",
+    "BULLISH ENGULFING": "A candlestick pattern where a green candle completely engulfs the previous red candle. This suggests buying pressure has overwhelmed selling pressure.",
+    "BEARISH ENGULFING": "A candlestick pattern where a red candle completely engulfs the previous green candle. This suggests selling pressure has overwhelmed buying pressure."
+}
 
 # Set up intents
 intents = discord.Intents.default()
 intents.message_content = True  # Allow the bot to see message content
-
+intents.reactions = True  # Enable reaction events
 
 # Define the bot client
 class TradingAlertsBot(discord.Client):
@@ -58,6 +81,7 @@ class TradingAlertsBot(discord.Client):
         ] = {}  # user_id -> list of channels
         self.synced = False
         self.scheduler = None
+        self.alert_messages = {}  # Store message_id -> alert_type mapping for reaction handling
 
     async def setup_hook(self):
         """Set up the bot's background tasks and sync commands"""
@@ -88,6 +112,49 @@ class TradingAlertsBot(discord.Client):
 
         # Send test alerts (temporary)
         asyncio.create_task(self.send_test_alerts())
+
+    async def on_reaction_add(self, reaction, user):
+        """Handle when users click reactions"""
+        # Ignore bot's own reactions
+        if user.id == self.user.id:
+            return
+            
+        # Check if it's a question mark reaction on one of our alert messages
+        if (reaction.emoji == "❓" and 
+            reaction.message.id in self.alert_messages and
+            reaction.message.author.id == self.user.id):
+            
+            alert_type = self.alert_messages[reaction.message.id]
+            
+            # Get the original embed
+            embed = reaction.message.embeds[0] if reaction.message.embeds else None
+            
+            if not embed:
+                return
+                
+            # Check if we already added the explanation (to avoid adding it multiple times)
+            if any(field.name == "Explanation" for field in embed.fields):
+                return
+                
+            # Find matching explanation
+            explanation = None
+            for key, value in ALERT_EXPLANATIONS.items():
+                if key in alert_type:
+                    explanation = value
+                    break
+                    
+            if not explanation:
+                explanation = "This alert suggests a potential trading opportunity. For more details on technical analysis, please research the specific indicator mentioned."
+            
+            # Add explanation field
+            embed.add_field(name="Explanation", value=explanation, inline=False)
+            
+            # Update the message
+            try:
+                await reaction.message.edit(embed=embed)
+                logger.info(f"Added explanation to alert message {reaction.message.id}")
+            except Exception as e:
+                logger.error(f"Error updating message with explanation: {e}")
 
     async def on_guild_join(self, guild):
         """Called when the bot joins a new guild (server)"""
@@ -134,6 +201,12 @@ class TradingAlertsBot(discord.Client):
             "`/list` - Show your watchlist\n"
             "`/settings` - Adjust alert thresholds\n"
             "`/stats` - View alert statistics",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Tip",
+            value="Click the ❓ reaction on alerts to get a simple explanation of what the alert means.",
             inline=False,
         )
 
@@ -216,10 +289,24 @@ class TradingAlertsBot(discord.Client):
 
                         # Simple direct send without any nested coroutines or tasks
                         try:
-                            await current_channel.send(embed=embed)
+                            message = await current_channel.send(embed=embed)
                             logger.info(
                                 f"Sent alert for {symbol} to channel {current_channel.id}"
                             )
+                            
+                            # Add question mark reaction for explanation
+                            await message.add_reaction("❓")
+                            
+                            # Extract alert type for explanations
+                            alert_type = ""
+                            if "**" in alert:
+                                parts = alert.split("**")
+                                if len(parts) >= 3:
+                                    alert_type = parts[1]  # Get text between first set of **
+                            
+                            # Store message ID and alert type
+                            self.alert_messages[message.id] = alert_type
+                            
                         except Exception as e:
                             logger.error(
                                 f"Failed to send alert to channel {current_channel.id}: {e}"
@@ -396,9 +483,23 @@ class TradingAlertsBot(discord.Client):
 
                 # Add timestamp
                 embed.timestamp = discord.utils.utcnow()
-
-                await channel.send(embed=embed)
+                
+                # Send the message
+                message = await channel.send(embed=embed)
                 logger.info(f"Sent test alert: {alert[:30]}...")
+                
+                # Add question mark reaction for explanation
+                await message.add_reaction("❓")
+                
+                # Extract alert type for explanations
+                alert_type = ""
+                if "**" in alert:
+                    parts = alert.split("**")
+                    if len(parts) >= 3:
+                        alert_type = parts[1]  # Get text between first set of **
+                
+                # Store message ID and alert type
+                self.alert_messages[message.id] = alert_type
 
                 # Add delay between messages
                 await asyncio.sleep(1.0)
