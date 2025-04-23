@@ -6,7 +6,8 @@ import pandas as pd
 import pandas_ta as ta
 
 # Setup logging
-logger = logging.getLogger("trading_alerts.indicators")
+logger = logging.getLogger("discord_trading_alerts.indicators")
+logger.setLevel(logging.INFO)
 
 
 def validate_data(df: pd.DataFrame, min_periods: int) -> bool:
@@ -200,8 +201,8 @@ def calculate_bollinger_bands(
     Returns:
     --------
     pd.DataFrame or None
-        DataFrame with columns ['BBL', 'BBM', 'BBU', 'BandWidth', 'PercentB'] if normalize=True
-        otherwise DataFrame with columns ['BBL', 'BBM', 'BBU'], or None if calculation failed
+        DataFrame with columns ['lower', 'middle', 'upper', 'bandwidth', 'PercentB'] if normalize=True
+        otherwise DataFrame with columns ['lower', 'middle', 'upper'], or None if calculation failed
     """
     try:
         # For testing purposes, allow smaller datasets but adjust the parameters
@@ -226,13 +227,18 @@ def calculate_bollinger_bands(
         # Map the actual column names from pandas-ta to our standard names
         # The .0 is present when std is passed as float (2.0 instead of 2)
         if f"BBL_{length}_{std}.0" in bb.columns:
-            result["BBL"] = bb[f"BBL_{length}_{std}.0"]
-            result["BBM"] = bb[f"BBM_{length}_{std}.0"]
-            result["BBU"] = bb[f"BBU_{length}_{std}.0"]
+            result["lower"] = bb[f"BBL_{length}_{std}.0"]
+            result["middle"] = bb[f"BBM_{length}_{std}.0"]
+            result["upper"] = bb[f"BBU_{length}_{std}.0"]
         else:
-            result["BBL"] = bb[f"BBL_{length}_{std}"]
-            result["BBM"] = bb[f"BBM_{length}_{std}"]
-            result["BBU"] = bb[f"BBU_{length}_{std}"]
+            result["lower"] = bb[f"BBL_{length}_{std}"]
+            result["middle"] = bb[f"BBM_{length}_{std}"]
+            result["upper"] = bb[f"BBU_{length}_{std}"]
+
+        # For backward compatibility, add the old column names as well
+        result["BBL"] = result["lower"]
+        result["BBM"] = result["middle"]
+        result["BBU"] = result["upper"]
 
         # Ensure lower band <= middle band <= upper band
         # Handle any potential calculation errors or edge cases
@@ -242,7 +248,9 @@ def calculate_bollinger_bands(
             result = result.loc[valid_rows]
 
         # Calculate bandwidth only for valid rows
-        result["BandWidth"] = (result["BBU"] - result["BBL"]) / result["BBM"]
+        result["bandwidth"] = (result["upper"] - result["lower"]) / result["middle"]
+        # For backward compatibility
+        result["BandWidth"] = result["bandwidth"]
 
         if normalize:
             # Use the existing PercentB if available, otherwise calculate
@@ -252,8 +260,8 @@ def calculate_bollinger_bands(
                 result["PercentB"] = bb[f"BBP_{length}_{std}"]
             else:
                 # Calculate %B manually if pandas-ta doesn't provide it
-                result["PercentB"] = (df["close"] - result["BBL"]) / (
-                    result["BBU"] - result["BBL"]
+                result["PercentB"] = (df["close"] - result["lower"]) / (
+                    result["upper"] - result["lower"]
                 )
                 # Clip to handle values outside bands
                 result["PercentB"] = result["PercentB"].clip(0, 1)
@@ -353,6 +361,86 @@ def calculate_adx(
         return None
 
 
+def calculate_atr(
+    df: pd.DataFrame, length: int = 14, calculate_percentiles: bool = True
+) -> Optional[pd.DataFrame]:
+    """
+    Calculate Average True Range (ATR) with optional percentile ranking
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Dataframe with OHLCV data
+    length : int
+        ATR period length
+    calculate_percentiles : bool
+        If True, calculate ATR percentile based on rolling lookback
+
+    Returns:
+    --------
+    pd.DataFrame or None
+        DataFrame with ['ATR', 'ATR_Percent', 'ATR_Percentile'], or None if calculation failed
+        - ATR: Raw ATR value
+        - ATR_Percent: ATR as percentage of price
+        - ATR_Percentile: Percentile rank (0-100) of current ATR vs historical
+    """
+    try:
+        min_periods = length * 3  # For better percentile calculation
+        if not validate_data(df, min_periods):
+            return None
+
+        # Use pandas_ta's ATR implementation
+        atr = ta.atr(df["high"], df["low"], df["close"], length=length)
+
+        # Create result dataframe
+        result = pd.DataFrame({"ATR": atr})
+
+        # Calculate ATR as percentage of price (more meaningful for comparison)
+        result["ATR_Percent"] = result["ATR"] / df["close"] * 100
+
+        # Calculate percentile ranking if requested
+        if calculate_percentiles:
+            # Use a longer lookback for percentile calculation (40 periods)
+            # This creates a rolling window of percentile ranks
+            lookback = min(len(df) - length, max(40, length * 3))
+
+            # Calculate rolling percentile - FIXED to properly calculate percentile
+            # Compare current value to historical values, return percentile (0-100)
+            result["ATR_Percentile"] = (
+                result["ATR_Percent"]
+                .rolling(window=lookback)
+                .apply(
+                    lambda x: 100 * sum(x.iloc[:-1] < x.iloc[-1]) / max(1, len(x) - 1)
+                )
+            )
+
+            # For early periods, calculate percentile based on available data
+            if lookback < length * 3:
+                early_percentile = pd.Series(index=result.index)
+                for i in range(length, min(length + lookback, len(result))):
+                    if i <= length:
+                        # Not enough data for comparison
+                        early_percentile.iloc[i] = 50  # Default to middle value
+                        continue
+
+                    window = result["ATR_Percent"].iloc[length:i]
+                    current_value = result["ATR_Percent"].iloc[i]
+
+                    # Calculate what percent of historical values current value exceeds
+                    percentile = 100 * sum(window < current_value) / len(window)
+                    early_percentile.iloc[i] = percentile
+
+                # Fill early periods with calculated percentiles
+                result.loc[
+                    early_percentile.notna(), "ATR_Percentile"
+                ] = early_percentile[early_percentile.notna()]
+
+        return result
+    except Exception as e:
+        logger.error(f"Error calculating ATR: {e}")
+        return None
+
+
 if __name__ == "__main__":
     from binance import fetch_market_data
 
@@ -383,3 +471,4 @@ if __name__ == "__main__":
         safe_print("Bollinger Bands", calculate_bollinger_bands(df))
         safe_print("Volume Spikes", calculate_volume_spikes(df))
         safe_print("ADX", calculate_adx(df))
+        safe_print("ATR", calculate_atr(df))
