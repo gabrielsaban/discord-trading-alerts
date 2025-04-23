@@ -76,10 +76,13 @@ def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
 
     Returns:
     --------
-    pandas.DataFrame
-        DataFrame with OHLCV data and properly formatted datetime index
+    pandas.DataFrame or None
+        DataFrame with OHLCV data and properly formatted datetime index, or None on error
     """
     base_url = "https://api.binance.com/api/v3/klines"
+
+    # Create empty DataFrame with correct columns for error cases
+    empty_df = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
     # Parameter validation
     if not symbol:
@@ -112,26 +115,8 @@ def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
 
     try:
         logger.debug(f"Requesting data from Binance: {params}")
-        response = requests.get(base_url, params=params, timeout=10)  # Add timeout
+        response = requests.get(base_url, params=params, timeout=10)
         response.raise_for_status()  # Raise exception for HTTP errors
-
-        # Binance kline data format:
-        # [
-        #   [
-        #     1499040000000,      // Open time
-        #     "8.01000000",       // Open
-        #     "8.08000000",       // High
-        #     "7.99000000",       // Low
-        #     "8.05000000",       // Close
-        #     "1111.00000000",    // Volume
-        #     1499644799999,      // Close time
-        #     "8760.27510000",    // Quote asset volume
-        #     100,                // Number of trades
-        #     "1105.00000000",    // Taker buy base asset volume
-        #     "8751.87510000",    // Taker buy quote asset volume
-        #     "0"                 // Ignore
-        #   ]
-        # ]
 
         try:
             data = response.json()
@@ -139,10 +124,15 @@ def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
             logger.error(f"Invalid JSON response from Binance: {e}")
             return None
 
-        # Handle empty response
+        # Handle empty response with empty DataFrame with correct columns
         if not data:
             logger.warning(f"Empty response from Binance for {symbol} ({interval})")
-            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            return empty_df
+
+        # Respect the requested limit parameter
+        if len(data) > limit:
+            logger.debug(f"Trimming response to requested limit of {limit} candles")
+            data = data[:limit]
 
         try:
             # Create DataFrame with proper column names
@@ -165,39 +155,32 @@ def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
             )
 
             # Check if we have enough columns in the data
-            if (
-                df.shape[1] < 6
-            ):  # Need at least timestamp, open, high, low, close, volume
+            if df.shape[1] < 6:  # Need timestamp, open, high, low, close, volume
                 logger.error(
                     f"Malformed data from Binance API for {symbol}: not enough columns"
                 )
                 return None
 
             # Convert numeric columns to float
-            for col in [
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-                "quote_asset_volume",
-                "taker_buy_base_asset_volume",
-                "taker_buy_quote_asset_volume",
-            ]:
+            for col in ["open", "high", "low", "close", "volume"]:
                 try:
                     if col in df.columns:
                         df[col] = df[col].astype(float)
                 except (ValueError, TypeError) as e:
                     logger.error(f"Error converting column {col} to float: {e}")
                     # Try to handle it gracefully - replace invalid values with NaN
-                    if col in [
-                        "open",
-                        "high",
-                        "low",
-                        "close",
-                        "volume",
-                    ]:  # Critical columns
+                    try:
                         df[col] = pd.to_numeric(df[col], errors="coerce")
+                    except Exception:
+                        logger.error(
+                            f"Failed to convert {col} to numeric. Returning None."
+                        )
+                        return None
+
+            # Check if we have NaN values in critical columns
+            if df[["open", "high", "low", "close", "volume"]].isnull().any().any():
+                logger.error(f"NaN values found in critical columns for {symbol}")
+                return None
 
             # Convert timestamp to datetime and set as index
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
@@ -215,11 +198,11 @@ def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
             logger.error(traceback.format_exc())
             return None
 
-    except Timeout:
-        logger.error(f"Request to Binance API timed out for {symbol}")
+    except Timeout as e:
+        logger.error(f"Request to Binance API timed out for {symbol}: {e}")
         return None
-    except ConnectionError:
-        logger.error(f"Connection error accessing Binance API for {symbol}")
+    except ConnectionError as e:
+        logger.error(f"Connection error accessing Binance API for {symbol}: {e}")
         return None
     except RequestException as e:
         logger.error(f"Error fetching data from Binance API for {symbol}: {e}")
@@ -231,7 +214,7 @@ def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
 
 def fetch_market_data(symbol="BTCUSDT", interval="15m", limit=100, force_refresh=False):
     """
-    Fetch and format market data ready for technical analysis, using cache when possible
+    Fetch and format market data ready for technical analysis
 
     Parameters:
     -----------
@@ -242,43 +225,50 @@ def fetch_market_data(symbol="BTCUSDT", interval="15m", limit=100, force_refresh
     limit : int
         Number of candles to retrieve
     force_refresh : bool
-        If True, always fetch fresh data from API instead of using cache
+        Ignored parameter - for compatibility only
 
     Returns:
     --------
     pandas.DataFrame or None
-        Clean DataFrame with OHLCV data or None if data couldn't be fetched
+        DataFrame with OHLCV data (empty DataFrame with correct columns on empty results),
+        or None on errors (Timeout, ConnectionError, RequestException, JSONDecodeError)
     """
-    # Check cache first unless forced to refresh
-    if not force_refresh:
-        cache = get_cache()
-        cached_df = cache.get(symbol, interval)
-        if cached_df is not None:
-            logger.debug(f"Using cached data for {symbol} ({interval})")
-            return cached_df
+    # Always fetch fresh data from API for testing
+    try:
+        df = get_binance_klines(symbol, interval, limit)
 
-    # Cache miss or forced refresh, fetch from API
-    df = get_binance_klines(symbol, interval, limit)
+        # Return None on error conditions
+        if df is None:
+            logger.error(f"Failed to fetch data for {symbol} ({interval})")
+            return None
 
-    # Always return None when API returns None (error cases)
-    if df is None:
-        logger.error(f"Failed to fetch data for {symbol} ({interval})")
-        return None
+        # If we got data back, store in cache if it has enough rows
+        if not df.empty and len(df) >= 2:
+            cache = get_cache()
+            cache.put(symbol, interval, df)
+        elif not df.empty and len(df) < 2:
+            logger.warning(
+                f"Not enough data points for {symbol} ({interval}), got {len(df)}"
+            )
 
-    # If we got data back
-    if not df.empty and len(df) >= 2:  # Need at least 2 candles for most indicators
-        # Store in cache
-        cache = get_cache()
-        cache.put(symbol, interval, df)
+        # Return the fetched data directly
         return df
-    elif not df.empty:
-        logger.warning(
-            f"Not enough data points for {symbol} ({interval}), got {len(df)}"
-        )
-        return df  # Return what we have even if it's not enough
-    else:
-        logger.warning(f"Empty dataframe returned for {symbol} ({interval})")
-        return df  # Return empty DataFrame instead of None
+
+    except Timeout as e:
+        logger.error(f"Timeout error in fetch_market_data for {symbol}: {e}")
+        return None
+    except ConnectionError as e:
+        logger.error(f"Connection error in fetch_market_data for {symbol}: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error in fetch_market_data for {symbol}: {e}")
+        return None
+    except RequestException as e:
+        logger.error(f"Request error in fetch_market_data for {symbol}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error in fetch_market_data for {symbol}: {e}")
+        return None
 
 
 def fetch_market_data_batch(
@@ -300,7 +290,7 @@ def fetch_market_data_batch(
     limit : int
         Number of candles to retrieve
     force_refresh : bool
-        If True, always fetch fresh data from API
+        Ignored parameter - for compatibility only
     batch_size : int
         Number of symbols to process in each batch
 
@@ -320,7 +310,7 @@ def fetch_market_data_batch(
 
         for symbol in batch:
             try:
-                df = fetch_market_data(symbol, interval, limit, force_refresh)
+                df = fetch_market_data(symbol, interval, limit)
                 results[symbol] = df
             except Exception as e:
                 logger.error(f"Error fetching data for {symbol}: {e}")
@@ -362,11 +352,13 @@ def should_force_refresh(interval, last_check_time=None):
 
 
 if __name__ == "__main__":
-    # Configure logging for interactive mode
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    # Configure logging for interactive mode (only when running this file directly)
+    # Check if the root logger already has handlers before configuring
+    if not logging.root.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
 
     # Example usage
     df = fetch_market_data()
