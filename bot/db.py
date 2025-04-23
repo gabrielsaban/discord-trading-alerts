@@ -7,9 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# logging.basicConfig is now handled in main.py
 logger = logging.getLogger("trading_alerts.db")
 
 # Database constants
@@ -138,6 +136,21 @@ class DatabaseManager:
                 registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, channel_id),
                 FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+            """
+            )
+
+            # System settings table for feature flags
+            cursor.execute(
+                """
+            CREATE TABLE IF NOT EXISTS system_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                description TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(category, key)
             )
             """
             )
@@ -630,6 +643,108 @@ class DatabaseManager:
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
             logger.error(f"Error getting alert channels for user {user_id}: {e}")
+            return []
+
+    def get_system_setting(self, category: str, key: str, default: str = None) -> str:
+        """
+        Get a system setting
+
+        Parameters:
+        -----------
+        category : str
+            Category of the setting (e.g., 'feature_flags')
+        key : str
+            Key of the setting
+        default : str, optional
+            Default value if setting is not found
+
+        Returns:
+        --------
+        str
+            The setting value or default if not found
+        """
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT value FROM system_settings WHERE category = ? AND key = ?",
+                (category, key),
+            )
+            row = cursor.fetchone()
+            if row:
+                return row["value"]
+            return default
+        except sqlite3.Error as e:
+            logger.error(f"Error getting system setting {category}.{key}: {e}")
+            return default
+
+    def set_system_setting(
+        self, category: str, key: str, value: str, description: str = None
+    ) -> bool:
+        """
+        Set a system setting
+
+        Parameters:
+        -----------
+        category : str
+            Category of the setting (e.g., 'feature_flags')
+        key : str
+            Key of the setting
+        value : str
+            Value to set
+        description : str, optional
+            Description of the setting
+
+        Returns:
+        --------
+        bool
+            True if setting was set successfully, False otherwise
+        """
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                INSERT INTO system_settings (category, key, value, description, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(category, key) DO UPDATE SET
+                    value = excluded.value,
+                    description = excluded.description,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (category, key, str(value), description),
+            )
+            self.connection.commit()
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error setting system setting {category}.{key}: {e}")
+            self.connection.rollback()
+            return False
+
+    def get_all_system_settings(self, category: str = None) -> List[Dict[str, str]]:
+        """
+        Get all system settings, optionally filtered by category
+
+        Parameters:
+        -----------
+        category : str, optional
+            Category to filter by
+
+        Returns:
+        --------
+        List[Dict[str, str]]
+            List of settings as dictionaries
+        """
+        try:
+            cursor = self.connection.cursor()
+            if category:
+                cursor.execute(
+                    "SELECT * FROM system_settings WHERE category = ? ORDER BY key",
+                    (category,),
+                )
+            else:
+                cursor.execute("SELECT * FROM system_settings ORDER BY category, key")
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting system settings: {e}")
             return []
 
 
