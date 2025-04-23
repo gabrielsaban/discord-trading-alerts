@@ -38,16 +38,11 @@ A live Discord bot that tracks crypto pairs using real-time Binance data and not
 
 The bot uses an advanced alert cooling system to prevent alert spam while ensuring you don't miss important signals:
 
-### Signal Strength Prioritization (Current)
+### Signal Strength Prioritization
 Strong signals can override cooldowns when they're significantly more important:
 - Extreme indicator readings (e.g., RSI below 20, ADX above 40)
 - Higher timeframe signals get priority
 - Signals with high strength can break through even if cooldown period hasn't fully elapsed
-
-This ensures you get timely alerts for truly significant market events while avoiding notification fatigue.
-
-### 🚀 Cooling System Enhancements (Planned)
-The following enhancements are prioritized for implementation:
 
 1. **ATR-Based Dynamic Cooldowns**
    - 5m: 20 min base cooldown (±5 min based on 30-min ATR)
@@ -68,11 +63,6 @@ The following enhancements are prioritized for implementation:
    - Group similar alerts during cooldown periods
    - Send summary with top 2 strongest signals when multiple alerts trigger
    - Include timestamps, strength metrics and price data in grouped summaries
-
-5. **Testing & Iteration**
-   - Run historical replay to measure spam reduction vs. missed high-confidence signals
-   - Adjust thresholds to hit ≥50% fewer alerts with <5% missed setups
-   - Fine-tune ATR sensitivity and override logic based on backtesting results
 
 ---
 
