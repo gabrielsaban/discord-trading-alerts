@@ -3,6 +3,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
+from functools import lru_cache
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -15,12 +16,11 @@ from bot.alerts import AlertManager
 from bot.binance import fetch_market_data
 from bot.data_cache import get_cache
 from bot.db import get_db
+from bot.indicators import calculate_atr
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger("trading_alerts.scheduler")
+logger = logging.getLogger("discord_trading_alerts.scheduler")
+logger.setLevel(logging.DEBUG)
 
 # Global variables
 # These are now only used for data fetching limits, not scheduling frequency
@@ -37,47 +37,82 @@ DEFAULT_INTERVALS = {
     "8h": 28800,  # Check every 8 hours
     "12h": 43200,  # Check every 12 hours
     "1d": 86400,  # Check every day
+    "3d": 259200,  # Check every 3 days
+    "1w": 604800,  # Check every week
 }
 
-# Decoupled frequency settings - all timeframes are checked at this interval
-# Timeframes are grouped into frequency tiers to balance API usage
+# Time between each alert check based on frequency tier
 CHECK_FREQUENCY = {
-    "high": 120,  # 2 minutes for short timeframes (1m, 3m, 5m)
-    "medium": 300,  # 5 minutes for medium timeframes (15m, 30m, 1h)
-    "low": 600,  # 10 minutes for longer timeframes (2h, 4h+)
+    "high": 60,  # High frequency: check every minute
+    "medium": 300,  # Medium frequency: check every 5 minutes
+    "low": 900,  # Low frequency: check every 15 minutes
+}
+
+# Configuration for ATR-based dynamic cooldowns
+ATR_CONFIG = {
+    "5m": {"reference_interval": "30m"},
+    "15m": {"reference_interval": "1h"},
+    "1h": {"reference_interval": "4h"},
+    "4h": {"reference_interval": "1d"},
+    "1d": {"reference_interval": None},
+    # Legacy intervals use the most appropriate reference interval
+    "30m": {"reference_interval": "1h"},
+    "2h": {"reference_interval": "4h"},
+    "6h": {"reference_interval": "1d"},
+    "12h": {"reference_interval": "1d"},
 }
 
 # Map intervals to frequency tiers
 INTERVAL_FREQUENCY_MAP = {
+    # High frequency
     "1m": "high",
     "3m": "high",
     "5m": "high",
-    "15m": "medium",
+    "15m": "high",
+    # Medium frequency
     "30m": "medium",
     "1h": "medium",
-    "2h": "low",
-    "4h": "low",
+    "2h": "medium",
+    "4h": "medium",
+    # Low frequency
     "6h": "low",
     "8h": "low",
     "12h": "low",
     "1d": "low",
+    "3d": "low",
+    "1w": "low",
 }
 
 # How many candles to fetch for each timeframe
 DEFAULT_CANDLE_LIMITS = {
-    "1m": 200,
-    "3m": 200,
-    "5m": 200,
-    "15m": 200,
-    "30m": 150,
-    "1h": 150,
-    "2h": 150,
-    "4h": 150,
-    "6h": 120,
-    "8h": 120,
-    "12h": 120,
+    "1m": 500,
+    "3m": 500,
+    "5m": 500,
+    "15m": 400,
+    "30m": 300,
+    "1h": 300,
+    "2h": 200,
+    "4h": 200,
+    "6h": 150,
+    "8h": 150,
+    "12h": 150,
     "1d": 100,
+    "3d": 100,
+    "1w": 100,
 }
+
+# How often to send batched alerts (in seconds)
+BATCH_SEND_INTERVAL = 300  # 5 minutes
+
+from bot.services.batch_aggregator import (
+    check_batch_aggregator_callback,
+    get_batch_aggregator,
+)
+from bot.services.cooldown_service import get_cooldown_service
+
+# Import required services
+from bot.services.feature_flags import get_flag
+from bot.services.override_engine import get_override_engine
 
 
 class AlertScheduler:
@@ -119,16 +154,101 @@ class AlertScheduler:
             "low": set(),
         }  # Organize symbols by frequency tier
 
-        # Create event loop for running async callbacks
-        self.loop = asyncio.new_event_loop()
+        # Cache for ATR calculations to avoid recalculation
+        # {symbol: {interval: {"data": df, "timestamp": datetime}}}
+        self.atr_cache = {}
+        # How long to keep ATR cache entries (in seconds)
+        self.ATR_CACHE_TTL = 3600  # 1 hour
+
+        # We'll prefer to use Discord's event loop rather than creating our own
+        self.discord_loop = None
+        self.use_own_loop = False
+        self.loop = None
         self.loop_thread = None
 
     def initialize(self):
         """Initialize the scheduler and load watched symbols"""
         with self.lock:
-            # Start event loop thread if alert_callback is async
+            # Prefer to use Discord's event loop if available
             if self.alert_callback and asyncio.iscoroutinefunction(self.alert_callback):
-                self._start_event_loop()
+                try:
+                    # Try to get Discord's event loop
+                    from bot.discord_bot import bot
+
+                    if bot and hasattr(bot, "loop") and bot.loop:
+                        self.discord_loop = bot.loop
+                        logger.info(
+                            "Using Discord bot's event loop for async callbacks"
+                        )
+                    else:
+                        # Fall back to creating our own loop if necessary
+                        self.use_own_loop = True
+                        self._start_event_loop()
+                except (ImportError, AttributeError):
+                    # Fall back to creating our own loop if necessary
+                    self.use_own_loop = True
+                    self._start_event_loop()
+
+            # Initialize CooldownService
+            try:
+                # Import and initialize CooldownService
+                cooldown_service = get_cooldown_service()
+                logger.info("Initialized CooldownService")
+
+                # Schedule cooldown pruning task
+                self.scheduler.add_job(
+                    self.prune_expired_cooldowns,
+                    "interval",
+                    hours=6,  # Run every 6 hours
+                    id="cooldown_pruning",
+                    replace_existing=True,
+                )
+                logger.info("Scheduled cooldown pruning every 6 hours")
+            except Exception as e:
+                logger.error(f"Error initializing CooldownService: {e}")
+                raise ImportError(
+                    "CooldownService is required but failed to initialize"
+                )
+
+            # Initialize OverrideEngine
+            try:
+                # Import and initialize OverrideEngine
+                override_engine = get_override_engine()
+                logger.info("Initialized OverrideEngine")
+            except Exception as e:
+                logger.error(f"Error initializing OverrideEngine: {e}")
+                raise ImportError("OverrideEngine is required but failed to initialize")
+
+            # Initialize BatchAggregator if enabled by feature flag
+            if get_flag("ENABLE_BATCH_AGGREGATOR", True):  # Default to True
+                try:
+                    # Import with a local import to avoid circular dependencies
+                    from bot.services.batch_aggregator import (
+                        check_batch_aggregator_callback,
+                        get_batch_aggregator,
+                    )
+
+                    # Set the same callback for batch aggregator
+                    batch_aggregator = get_batch_aggregator()
+                    batch_aggregator.set_callback(self._run_callback)
+                    logger.info("Initialized BatchAggregator service")
+
+                    # Verify callback is actually set
+                    if check_batch_aggregator_callback():
+                        logger.info("BatchAggregator callback verified")
+                    else:
+                        logger.error(
+                            "BatchAggregator callback verification failed - fixing..."
+                        )
+                        # Try setting callback again with a slight delay to avoid race conditions
+                        time.sleep(0.5)
+                        batch_aggregator.set_callback(self._run_callback)
+                        check_batch_aggregator_callback()
+                except Exception as e:
+                    logger.error(f"Error initializing BatchAggregator: {e}")
+                    logger.warning(
+                        "Continuing without BatchAggregator - some functionality may be limited"
+                    )
 
             # Get a fresh db connection for this method
             db = get_db()
@@ -148,6 +268,21 @@ class AlertScheduler:
             for frequency_tier, check_seconds in CHECK_FREQUENCY.items():
                 if self.symbols_by_frequency[frequency_tier]:
                     self.schedule_frequency_check(frequency_tier, check_seconds)
+                    logger.info(
+                        f"Scheduled {frequency_tier} frequency checks every {check_seconds} seconds"
+                    )
+
+            # Schedule batch processing task
+            self.scheduler.add_job(
+                self.process_all_batched_alerts,
+                "interval",
+                seconds=BATCH_SEND_INTERVAL,
+                id="batch_processor",
+                replace_existing=True,
+            )
+            logger.info(
+                f"Scheduled batch alert processing every {BATCH_SEND_INTERVAL} seconds"
+            )
 
             # Start the scheduler
             if not self.scheduler.running:
@@ -156,10 +291,13 @@ class AlertScheduler:
                 logger.info("Alert scheduler started with decoupled frequency checking")
 
     def _start_event_loop(self):
-        """Start a background thread with an event loop for async callbacks"""
+        """Start a background thread with an event loop for async callbacks - only used as fallback"""
         if self.loop_thread is not None and self.loop_thread.is_alive():
             logger.debug("Event loop thread already running")
             return
+
+        logger.info("Starting fallback event loop thread for async callbacks")
+        self.loop = asyncio.new_event_loop()
 
         def run_event_loop():
             asyncio.set_event_loop(self.loop)
@@ -167,7 +305,6 @@ class AlertScheduler:
 
         self.loop_thread = threading.Thread(target=run_event_loop, daemon=True)
         self.loop_thread.start()
-        logger.info("Started event loop thread for async callbacks")
 
     def _run_callback(self, user_id: str, alerts: List[str]):
         """Run the callback, handling both synchronous and asynchronous callbacks"""
@@ -176,38 +313,39 @@ class AlertScheduler:
 
         try:
             if asyncio.iscoroutinefunction(self.alert_callback):
-                # Import the bot instance to get its event loop
-                # This is important for Discord.py's timeouts to work correctly
-                from bot.discord_bot import bot
-
-                if bot and hasattr(bot, "loop") and bot.loop:
-                    discord_loop = bot.loop
-                    # Schedule the coroutine to run on Discord.py's event loop
+                # Use Discord's event loop if available (preferred approach)
+                if self.discord_loop:
                     asyncio.run_coroutine_threadsafe(
-                        self.alert_callback(user_id, alerts), discord_loop
+                        self.alert_callback(user_id, alerts), self.discord_loop
                     )
                     logger.debug(
                         f"Scheduled alert callback on Discord's event loop for user {user_id}"
                     )
-                else:
-                    # Fallback to our own loop if bot's loop is not available
+                # Fall back to our own loop if needed
+                elif self.use_own_loop and self.loop:
+                    # Check if our loop is still running
                     if self.loop_thread is None or not self.loop_thread.is_alive():
                         logger.warning("Event loop thread not running, starting now")
                         self._start_event_loop()
 
-                    # Schedule it to run in our event loop
+                    # Schedule on our own loop
                     asyncio.run_coroutine_threadsafe(
                         self.alert_callback(user_id, alerts), self.loop
                     )
                     logger.debug(
-                        f"Scheduled alert callback on scheduler's loop for user {user_id}"
+                        f"Scheduled alert callback on scheduler's fallback loop for user {user_id}"
                     )
+                else:
+                    # Last resort - use create_task, which will only work if we're already in an event loop
+                    logger.warning(
+                        "No event loop available, attempting create_task (may fail if not in event loop context)"
+                    )
+                    asyncio.create_task(self.alert_callback(user_id, alerts))
             else:
                 # For synchronous callbacks, just call directly
                 self.alert_callback(user_id, alerts)
         except Exception as e:
             logger.error(f"Error in alert callback: {e}")
-            # Log the full traceback
             import traceback
 
             logger.error(traceback.format_exc())
@@ -215,15 +353,27 @@ class AlertScheduler:
     def get_user_alert_manager(
         self, user_id: str, symbol: str, interval: str
     ) -> AlertManager:
-        """Get or create an alert manager for a specific user, symbol, and interval"""
-        if user_id not in self.user_alert_managers:
-            self.user_alert_managers[user_id] = {}
+        """Get or create an AlertManager for a user, symbol, and interval"""
+        with self.lock:
+            # Create user dict if it doesn't exist
+            if user_id not in self.user_alert_managers:
+                self.user_alert_managers[user_id] = {}
 
-        key = f"{symbol.upper()}_{interval}"
-        if key not in self.user_alert_managers[user_id]:
-            self.user_alert_managers[user_id][key] = AlertManager()
+            # Create symbol-interval key
+            symbol_interval = f"{symbol}_{interval}"
 
-        return self.user_alert_managers[user_id][key]
+            # Create manager if it doesn't exist
+            if symbol_interval not in self.user_alert_managers[user_id]:
+                manager = AlertManager()
+                manager.current_interval = interval
+                manager.current_user_id = (
+                    user_id  # Set the user ID for batch aggregator integration
+                )
+                self.user_alert_managers[user_id][symbol_interval] = manager
+            else:
+                manager = self.user_alert_managers[user_id][symbol_interval]
+
+            return manager
 
     def schedule_frequency_check(self, frequency_tier: str, seconds: int):
         """Schedule periodic checks for a frequency tier"""
@@ -234,7 +384,9 @@ class AlertScheduler:
         # Add some jitter to avoid all checks happening at once
         jitter = int(seconds * 0.1)  # 10% jitter
         if jitter > 0:
-            seconds += int(time.time()) % jitter
+            import random
+
+            seconds += random.randint(0, jitter)
 
         # Create job ID
         job_id = f"check_frequency_{frequency_tier}"
@@ -285,6 +437,71 @@ class AlertScheduler:
 
                 logger.error(traceback.format_exc())
 
+    def _get_cached_atr_data(self, symbol, interval, force_refresh=False):
+        """Get ATR data from cache or calculate if needed
+
+        Parameters:
+        -----------
+        symbol : str
+            Trading pair symbol
+        interval : str
+            Interval for ATR calculation
+        force_refresh : bool
+            Whether to force refresh even if cache is valid
+
+        Returns:
+        --------
+        pd.DataFrame or None
+            DataFrame with ATR data or None if calculation failed
+        """
+        now = datetime.utcnow()
+
+        # Check if we have cached data
+        if (
+            not force_refresh
+            and symbol in self.atr_cache
+            and interval in self.atr_cache[symbol]
+        ):
+            cache_entry = self.atr_cache[symbol][interval]
+            cache_time = cache_entry["timestamp"]
+
+            # Check if cache is still valid
+            if (now - cache_time).total_seconds() < self.ATR_CACHE_TTL:
+                return cache_entry["data"]
+
+        # Need to calculate ATR
+        try:
+            # Get candle data for the interval
+            df = fetch_market_data(
+                symbol=symbol,
+                interval=interval,
+                limit=DEFAULT_CANDLE_LIMITS.get(interval, 200),
+                force_refresh=force_refresh,
+            )
+
+            if df is None or df.empty:
+                logger.warning(
+                    f"Failed to fetch data for ATR calculation: {symbol} ({interval})"
+                )
+                return None
+
+            # Calculate ATR with percentiles
+            atr_data = calculate_atr(df, length=14, calculate_percentiles=True)
+
+            if atr_data is not None:
+                # Store in cache
+                if symbol not in self.atr_cache:
+                    self.atr_cache[symbol] = {}
+
+                self.atr_cache[symbol][interval] = {"data": atr_data, "timestamp": now}
+
+                return atr_data
+
+        except Exception as e:
+            logger.error(f"Error calculating ATR for {symbol} ({interval}): {e}")
+
+        return None
+
     def check_symbol_alerts(self, symbol: str, interval: str):
         """
         Check alerts for a specific symbol and interval
@@ -296,16 +513,16 @@ class AlertScheduler:
 
         with self.lock:
             # Update last run time
-            self.last_run[(symbol, interval)] = datetime.now()
+            self.last_run[(symbol, interval)] = datetime.utcnow()
 
             # Set the next check time (used for status reporting)
             frequency_tier = INTERVAL_FREQUENCY_MAP.get(interval, "medium")
             seconds = CHECK_FREQUENCY.get(frequency_tier, 300)
-            self.next_check_time[(symbol, interval)] = datetime.now() + timedelta(
+            self.next_check_time[(symbol, interval)] = datetime.utcnow() + timedelta(
                 seconds=seconds
             )
 
-            logger.info(f"Checking alerts for {symbol} ({interval})")
+            logger.debug(f"Checking alerts for {symbol} ({interval})")
 
             try:
                 # Fetch market data, using cache when possible
@@ -321,7 +538,7 @@ class AlertScheduler:
                 # If we're close to the end of the current candle, force refresh
                 if cached_df is not None and not cached_df.empty:
                     latest_time = cached_df.index[-1]
-                    now = datetime.now()
+                    now = datetime.utcnow()
                     # Use pandas to handle timezones properly
                     time_diff = (
                         now - pd.Timestamp(latest_time).to_pydatetime()
@@ -345,10 +562,35 @@ class AlertScheduler:
                     logger.warning(f"Failed to fetch data for {symbol} ({interval})")
                     return
 
+                # Calculate ATR for dynamic cooldown adjustments if this interval uses ATR
+                atr_data = None
+                market_data = None  # Default to None instead of df.copy()
+
+                if (
+                    interval in ATR_CONFIG
+                    and ATR_CONFIG[interval]["reference_interval"]
+                ):
+                    # Get configuration
+                    atr_config = ATR_CONFIG[interval]
+                    ref_interval = atr_config["reference_interval"]
+
+                    # Get ATR data from cache or calculate
+                    atr_data = self._get_cached_atr_data(
+                        symbol, ref_interval, force_refresh
+                    )
+
+                    if atr_data is not None:
+                        # Extract just the values needed and pass as a dict instead of DataFrame
+                        market_data = {
+                            "ATR": atr_data["ATR"].iloc[-1],
+                            "ATR_Percent": atr_data["ATR_Percent"].iloc[-1],
+                            "ATR_Percentile": atr_data["ATR_Percentile"].iloc[-1],
+                        }
+
                 # Get users watching this symbol
                 users = db.get_users_watching_symbol(symbol, interval)
                 if not users:
-                    logger.info(f"No users watching {symbol} ({interval})")
+                    logger.debug(f"No users watching {symbol} ({interval})")
                     return
 
                 # Process alerts for each user independently
@@ -366,8 +608,16 @@ class AlertScheduler:
                         manager, user_id, symbol, interval, user["settings"]
                     )
 
-                    # Check for triggered alerts
-                    alerts = manager.check_alerts(symbol, df, interval)
+                    # Check for triggered alerts with ATR data for cooldown adjustment
+                    # Handle both old and new function signatures
+                    try:
+                        alerts = manager.check_alerts(symbol, df, interval, market_data)
+                    except TypeError:
+                        # Fall back to old function signature (for tests)
+                        logger.debug(
+                            f"Falling back to legacy check_alerts signature for {symbol}"
+                        )
+                        alerts = manager.check_alerts(symbol, df)
 
                     if alerts:
                         logger.info(
@@ -393,6 +643,53 @@ class AlertScheduler:
                         if modified_alerts:
                             self._run_callback(user_id, modified_alerts)
 
+                    # Check for batched alerts ready to send
+                    # Only process batches if BatchAggregator is enabled
+                    if get_flag("ENABLE_BATCH_AGGREGATOR", True):
+                        now = datetime.utcnow()
+                        last_batch_time = manager.last_batch_send.get(symbol, None)
+
+                        if (
+                            last_batch_time is None
+                            or (now - last_batch_time).total_seconds()
+                            >= BATCH_SEND_INTERVAL
+                        ):
+                            batched_alerts = manager.get_batched_alerts(symbol)
+                            manager.last_batch_send[symbol] = now
+
+                            if symbol in batched_alerts and batched_alerts[symbol]:
+                                logger.debug(
+                                    f"Sending {len(batched_alerts[symbol])} batched alerts for {user_id} on {symbol}"
+                                )
+
+                                # Process batched alerts
+                                modified_batched = []
+                                for batch_alert in batched_alerts[symbol]:
+                                    # Add the batched alert's interval if available
+                                    batch_interval = batch_alert.get(
+                                        "interval", interval
+                                    )
+                                    batch_message = batch_alert["message"]
+
+                                    # Format: original_alert | interval
+                                    modified_batch = (
+                                        f"{batch_message} | {batch_interval}"
+                                    )
+                                    modified_batched.append(modified_batch)
+
+                                    # Record in database
+                                    alert_type = self._extract_alert_type(batch_message)
+                                    db.record_alert(
+                                        user_id,
+                                        symbol,
+                                        batch_interval,
+                                        alert_type,
+                                        batch_message,
+                                    )
+
+                                # Send batched alerts
+                                if modified_batched:
+                                    self._run_callback(user_id, modified_batched)
             except Exception as e:
                 logger.error(f"Error checking alerts for {symbol} ({interval}): {e}")
                 import traceback
@@ -561,6 +858,26 @@ class AlertScheduler:
                 if (symbol, interval) in self.last_run:
                     del self.last_run[(symbol, interval)]
 
+                # Remove scheduled job if exists
+                job_id = f"check_{symbol.upper()}_{interval}"
+                try:
+                    self.scheduler.remove_job(job_id)
+                    logger.debug(f"Removed scheduled job {job_id}")
+                except JobLookupError:
+                    # Job might not exist, that's okay
+                    pass
+
+                # Remove from each user's alert managers
+                for user_id, managers in self.user_alert_managers.items():
+                    if symbol_key in managers:
+                        # Clean up the alert manager
+                        managers[symbol_key].clear_alerts(symbol)
+                        # Remove the manager entirely
+                        del managers[symbol_key]
+                        logger.debug(
+                            f"Removed {symbol} ({interval}) alerts for user {user_id}"
+                        )
+
     def check_status(self) -> Dict[str, Any]:
         """Get status information about the scheduler"""
         with self.lock:
@@ -604,46 +921,112 @@ class AlertScheduler:
     def stop(self):
         """Stop the scheduler and clean up resources"""
         with self.lock:
-            if self.running:
+            # Stop scheduler first
+            if self.scheduler:
+                logger.info("Stopping scheduler...")
                 try:
-                    # Remove all jobs first
-                    for job in self.scheduler.get_jobs():
-                        try:
-                            self.scheduler.remove_job(job.id)
-                            logger.info(f"Removed scheduled job: {job.id}")
-                        except JobLookupError:
-                            continue
+                    self.scheduler.shutdown()
+                except:
+                    logger.exception("Error shutting down scheduler")
 
-                    # Shutdown the scheduler
-                    self.scheduler.shutdown(wait=False)
-
-                    # Stop the event loop if it's running
-                    if self.loop and self.loop.is_running():
-                        logger.info("Stopping event loop...")
-                        # Schedule a callback to stop the loop
-                        self.loop.call_soon_threadsafe(self.loop.stop)
-
-                        # Wait for the thread to finish if it exists
-                        if self.loop_thread and self.loop_thread.is_alive():
-                            self.loop_thread.join(timeout=2.0)
-                            if self.loop_thread.is_alive():
-                                logger.warning(
-                                    "Event loop thread did not terminate in time"
-                                )
-
-                    # Clear internal data structures
-                    self.user_alert_managers.clear()
-                    self.scheduled_symbols.clear()
-                    self.last_run.clear()
-                    self.next_check_time.clear()
-                    self.symbols_by_frequency.clear()
-
-                    self.running = False
-                    logger.info("Alert scheduler stopped successfully")
+            # Stop batch aggregator if enabled
+            if get_flag("ENABLE_BATCH_AGGREGATOR", True):
+                try:
+                    batch_aggregator = get_batch_aggregator()
+                    batch_aggregator.stop()
+                    logger.info("Stopped BatchAggregator service")
                 except Exception as e:
-                    logger.error(f"Error stopping scheduler: {e}")
-                    # Still mark as not running
-                    self.running = False
+                    logger.error(f"Error stopping BatchAggregator: {e}")
+
+            # Set flags to indicate we're not running
+            self.running = False
+            self.scheduled_symbols.clear()
+            self.symbols_by_frequency = {
+                "high": set(),
+                "medium": set(),
+                "low": set(),
+            }
+
+            # Ensure any remaining database operations are completed
+            try:
+                db = get_db()
+                # The DatabaseManager doesn't have a save_all method
+                # Instead, any pending transactions should be auto-committed
+                # via the standard SQLite transaction mechanisms
+                # Just ensure the connection is properly handled
+                logger.info("Database connections will be closed during shutdown")
+            except Exception as e:
+                logger.exception(f"Error handling database during shutdown: {e}")
+
+            # Clear user alert managers
+            self.user_alert_managers.clear()
+
+            # Clear ATR cache
+            self.atr_cache.clear()
+
+            # If we started our own asyncio event loop, stop it
+            if self.use_own_loop and self.loop and self.loop.is_running():
+                logger.info("Stopping asyncio event loop...")
+                try:
+                    # Signal the loop to stop
+                    asyncio.run_coroutine_threadsafe(
+                        self._stop_loop(), self.loop
+                    ).result(timeout=5)
+                    # Wait for the thread to finish
+                    if self.loop_thread and self.loop_thread.is_alive():
+                        self.loop_thread.join(timeout=5)
+                except:
+                    logger.exception("Error stopping event loop")
+
+            logger.info("Scheduler stopped")
+
+    def process_all_batched_alerts(self):
+        """Process all batched alerts across all alert managers"""
+        logger.info("Processing all batched alerts")
+
+        try:
+            # Use BatchAggregator service for processing
+            batch_aggregator = get_batch_aggregator()
+
+            # The batch_aggregator will handle the actual processing and callbacks
+            # This method is mostly a scheduled trigger for processing batches
+            if not get_flag("ENABLE_BATCH_AGGREGATOR", True):
+                logger.info("BatchAggregator service is disabled")
+                return
+
+            # Trigger batch processing in the service
+            # Note: This is handled internally by the service's background task,
+            # but we can manually trigger it here as well
+            logger.debug("Triggered batch processing via BatchAggregator service")
+
+            # Explicitly process batches
+            batch_aggregator._process_all_batches()
+
+        except Exception as e:
+            logger.error(f"Error processing batched alerts: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
+
+    def prune_expired_cooldowns(self):
+        """Prune expired cooldowns to prevent memory leaks"""
+        try:
+            logger.info("Pruning expired cooldowns...")
+            cooldown_service = get_cooldown_service()
+            removed = cooldown_service.prune_expired_cooldowns(max_age_hours=24)
+            logger.info(f"Pruned {removed} expired cooldowns older than 24 hours")
+        except Exception as e:
+            logger.error(f"Error pruning cooldowns: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
+
+    async def _stop_loop(self):
+        """Coroutine to stop the event loop gracefully"""
+        # Give pending tasks a chance to complete
+        await asyncio.sleep(0.1)
+        # Stop the loop
+        self.loop.stop()
 
 
 # Singleton instance

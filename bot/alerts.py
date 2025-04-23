@@ -1,9 +1,14 @@
 import logging
+import threading
+from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+# Configure logger first before any usage
+logger = logging.getLogger("discord_trading_alerts.alerts")
 
 # Import indicator functions
 from bot.indicators import (
@@ -15,11 +20,37 @@ from bot.indicators import (
     calculate_volume_spikes,
 )
 
-# Configure logger
-logger = logging.getLogger(__name__)
+# Using try/except allows tests to run without feature flag dependency
+# and avoids circular imports
+try:
+    from bot.services.batch_aggregator import get_batch_aggregator
+    from bot.services.cooldown_service import get_cooldown_service
+    from bot.services.feature_flags import get_flag
+    from bot.services.override_engine import get_override_engine
+
+    FEATURE_FLAGS_AVAILABLE = True
+
+    # Log feature flag status on module load
+    logger.info("FEATURE FLAGS STATUS:")
+    logger.info(
+        f"  ENABLE_COOLDOWN_SERVICE: {get_flag('ENABLE_COOLDOWN_SERVICE', False)}"
+    )
+    logger.info(
+        f"  ENABLE_OVERRIDE_ENGINE: {get_flag('ENABLE_OVERRIDE_ENGINE', False)}"
+    )
+    logger.info(
+        f"  ENABLE_BATCH_AGGREGATOR: {get_flag('ENABLE_BATCH_AGGREGATOR', False)}"
+    )
+except ImportError:
+    logger.warning("Feature flags module not available, using legacy implementation")
+    FEATURE_FLAGS_AVAILABLE = False
+
+    def get_flag(flag_name: str, default_value: Any = None) -> Any:
+        """Fallback implementation when feature flags are not available"""
+        return default_value
 
 
-class AlertCondition:
+class AlertCondition(ABC):
     """Base class for alert conditions"""
 
     def __init__(self, symbol: str, cooldown_minutes: int = 10):
@@ -31,10 +62,13 @@ class AlertCondition:
         symbol : str
             Trading pair symbol (e.g., 'BTCUSDT')
         cooldown_minutes : int
-            Minimum minutes between repeated alerts
+            Minimum minutes between repeated alerts (legacy parameter, unused)
         """
         self.symbol = symbol
-        self.last_triggered = None  # Timestamp of last alert
+        # Store interval for reference by AlertManager
+        self.interval = None
+        # We keep these fields for backward compatibility
+        self.last_triggered = None
         self.cooldown = timedelta(minutes=cooldown_minutes)
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
@@ -54,30 +88,21 @@ class AlertCondition:
         raise NotImplementedError("Subclasses must implement check()")
 
     def can_trigger(self) -> bool:
-        """Check if alert can trigger based on cooldown"""
-        now = datetime.now()
-        if not self.last_triggered:
-            logger.debug(
-                f"{type(self).__name__} for {self.symbol} has never triggered before"
-            )
-            return True
-
-        elapsed = now - self.last_triggered
-        cooldown_expired = elapsed > self.cooldown
-
-        if not cooldown_expired:
-            minutes_remaining = int(self.cooldown.total_seconds() / 60) - int(
-                elapsed.total_seconds() / 60
-            )
-            logger.debug(
-                f"{type(self).__name__} for {self.symbol} in cooldown ({minutes_remaining} minutes remaining)"
-            )
-
-        return cooldown_expired
+        """
+        DEPRECATED: Use AlertManager._is_globally_cooled_down instead.
+        Legacy cooldown check - not used in current system.
+        """
+        logger.debug(f"DEPRECATED can_trigger() called on {type(self).__name__}")
+        return True  # Always allow AlertManager to handle cooldowns
 
     def mark_triggered(self):
-        """Mark alert as triggered now"""
-        self.last_triggered = datetime.now()
+        """
+        DEPRECATED: Use AlertManager._update_global_cooldown instead.
+        Legacy method for marking alerts as triggered - not used in current system.
+        """
+        logger.debug(f"DEPRECATED mark_triggered() called on {type(self).__name__}")
+        # Set the last_triggered time to maintain backward compatibility with tests
+        self.last_triggered = datetime.utcnow()
 
     def format_price(self, price: float) -> str:
         """Format price based on magnitude"""
@@ -91,6 +116,47 @@ class AlertCondition:
             return f"{price:.2f}"
         else:
             return f"{price:.1f}"
+
+    # These methods are deprecated and should not be used
+    def calculate_dynamic_cooldown(
+        self,
+        pair,
+        atr_percentile=None,
+        is_high_volatility=False,
+        is_strong_signal=False,
+    ):
+        """
+        DEPRECATED: Use AlertManager._get_atr_adjusted_cooldown instead.
+        Legacy method for dynamic cooldowns - not used in current system.
+        """
+        raise NotImplementedError(
+            "Legacy cooldown method: calculate_dynamic_cooldown is no longer supported. Use CooldownService instead."
+        )
+
+    def is_in_cooldown(
+        self,
+        pair,
+        timestamp,
+        atr_percentile=None,
+        is_high_volatility=False,
+        is_strong_signal=False,
+    ):
+        """
+        DEPRECATED: Use AlertManager._is_globally_cooled_down instead.
+        Legacy method for cooldown checking - not used in current system.
+        """
+        raise NotImplementedError(
+            "Legacy cooldown method: is_in_cooldown is no longer supported. Use CooldownService instead."
+        )
+
+    def add_cooldown(self, pair, timestamp):
+        """
+        DEPRECATED: Use AlertManager._update_global_cooldown instead.
+        Legacy method for adding cooldowns - not used in current system.
+        """
+        raise NotImplementedError(
+            "Legacy cooldown method: add_cooldown is no longer supported. Use CooldownService instead."
+        )
 
 
 class RsiAlert(AlertCondition):
@@ -108,9 +174,6 @@ class RsiAlert(AlertCondition):
         self.overbought = overbought
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
-        if not self.can_trigger():
-            return None
-
         rsi = calculate_rsi(df)
         if rsi is None or len(rsi) < 2:
             logger.debug(f"RSI calculation failed for {self.symbol}")
@@ -140,8 +203,6 @@ class RsiAlert(AlertCondition):
             )
             message = f"🟢 **RSI OVERBOUGHT**: {self.symbol} RSI at {latest_rsi:.1f}\nPrice: {price_str}\nThreshold: {self.overbought}, Latest RSI: {latest_rsi:.1f}"
 
-        if message:
-            self.mark_triggered()
         return message
 
 
@@ -152,9 +213,6 @@ class MacdAlert(AlertCondition):
         super().__init__(symbol, cooldown_minutes)
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
-        if not self.can_trigger():
-            return None
-
         macd_df = calculate_macd(df)
         if macd_df is None or len(macd_df) < 2:
             return None
@@ -172,8 +230,6 @@ class MacdAlert(AlertCondition):
         elif latest["MACD"] < latest["Signal"] and prev["MACD"] >= prev["Signal"]:
             message = f"🔴 **MACD BEARISH CROSS**: {self.symbol}\nPrice: {price_str}\nMACD: {latest['MACD']:.4f}, Signal: {latest['Signal']:.4f}, Histogram: {latest['Histogram']:.4f}"
 
-        if message:
-            self.mark_triggered()
         return message
 
 
@@ -188,9 +244,6 @@ class EmaCrossAlert(AlertCondition):
         self.long = long
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
-        if not self.can_trigger():
-            return None
-
         ema_df = calculate_ema_cross(df, short=self.short, long=self.long)
         if ema_df is None or len(ema_df) < 2:
             return None
@@ -210,8 +263,6 @@ class EmaCrossAlert(AlertCondition):
         elif ema_df["Cross_Down"].iloc[-1]:
             message = f"🔴 **EMA BEARISH CROSS**: {self.symbol} EMA{self.short} crossed below EMA{self.long}\nPrice: {price_str}\nEMA{self.short}: {latest_short_ema:.4f}, EMA{self.long}: {latest_long_ema:.4f}"
 
-        if message:
-            self.mark_triggered()
         return message
 
 
@@ -225,9 +276,6 @@ class BollingerBandAlert(AlertCondition):
         self.squeeze_threshold = squeeze_threshold  # For band squeeze detection
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
-        if not self.can_trigger():
-            return None
-
         bb = calculate_bollinger_bands(df, length=20, std=2, normalize=True)
         if bb is None or len(bb) < 2:
             return None
@@ -256,8 +304,6 @@ class BollingerBandAlert(AlertCondition):
         ):
             message = f"🟡 **BOLLINGER SQUEEZE**: {self.symbol} Bands narrowing, potential breakout\nPrice: {price_str}\nBandwidth: {current['BandWidth']:.4f}, Threshold: {self.squeeze_threshold}"
 
-        if message:
-            self.mark_triggered()
         return message
 
 
@@ -276,9 +322,6 @@ class VolumeSpikeAlert(AlertCondition):
         self.z_score = z_score
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
-        if not self.can_trigger():
-            return None
-
         vol_df = calculate_volume_spikes(
             df, length=20, threshold=self.threshold, z_score=self.z_score
         )
@@ -301,7 +344,6 @@ class VolumeSpikeAlert(AlertCondition):
         else:
             message = f"📊 **VOLUME SPIKE**: {self.symbol} {direction}\n{latest['volume_ratio']:.1f}x average\nPrice: {price_str}\nThreshold: {self.threshold}x, Current: {latest['volume_ratio']:.2f}x"
 
-        self.mark_triggered()
         return message
 
 
@@ -313,9 +355,6 @@ class AdxAlert(AlertCondition):
         self.threshold = threshold
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
-        if not self.can_trigger():
-            return None
-
         adx_df = calculate_adx(df, length=14, threshold=self.threshold)
         if adx_df is None or len(adx_df) < 2:
             return None
@@ -338,8 +377,6 @@ class AdxAlert(AlertCondition):
             new_direction = "BULLISH 📈" if latest["Trend"] == "Bullish" else "BEARISH 📉"
             message = f"🔄 **TREND REVERSAL to {new_direction}**: {self.symbol} ADX: {latest['ADX']:.1f}\nPrice: {price_str}\nThreshold: {self.threshold}, Current ADX: {latest['ADX']:.1f}, Previous Direction: {prev['Trend']}"
 
-        if message:
-            self.mark_triggered()
         return message
 
 
@@ -350,9 +387,6 @@ class PatternAlert(AlertCondition):
         super().__init__(symbol, cooldown_minutes)
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
-        if not self.can_trigger():
-            return None
-
         if len(df) < 5:  # Need at least 5 candles for pattern detection
             return None
 
@@ -395,8 +429,6 @@ class PatternAlert(AlertCondition):
             body_ratio = c2_body / c1_body if c1_body > 0 else 0
             message = f"🔄 **{pattern_type} ENGULFING**: {self.symbol}\nPrice: {price_str}\nBody Ratio: {body_ratio:.2f}x, Confidence: {'High' if body_ratio > 1.5 else 'Medium'}"
 
-        if message:
-            self.mark_triggered()
         return message
 
     def _is_hammer(self, candle: pd.Series) -> bool:
@@ -466,41 +498,54 @@ class PatternAlert(AlertCondition):
 class AlertManager:
     """Manages multiple alert conditions for different symbols"""
 
+    # Class variable to control verbose logging
+    _verbose_logging = False
+
     def __init__(self):
         self.alerts: Dict[str, List[AlertCondition]] = {}
-        # Track global cooldowns across timeframes - {symbol+alert_type: {interval: last_triggered_time, strength: value}}
-        # This is a class variable shared across all instances to ensure global cooldown
-        # across different AlertManager instances for different intervals
-        if not hasattr(AlertManager, "global_cooldowns"):
-            AlertManager.global_cooldowns = {}
-        # Default global cooldown minutes - now based on timeframe
-        self.timeframe_cooldowns = {
-            # Short timeframes
-            "1m": 15,
-            "3m": 20,
-            "5m": 30,
-            # Medium timeframes
-            "15m": 60,
-            "30m": 90,
-            "1h": 180,  # 3 hours
-            # Long timeframes
-            "2h": 360,  # 6 hours
-            "4h": 720,  # 12 hours
-            "6h": 1080,  # 18 hours
-            "8h": 1440,  # 24 hours
-            "12h": 2160,  # 36 hours
-            "1d": 2880,  # 48 hours
+
+        # Maps intervals to their ATR reference intervals for volatility adjustment
+        # This is kept for reference but actual cooldown logic is in CooldownService
+        self.atr_reference_intervals = {
+            "5m": "30m",  # 5m uses 30m ATR for volatility
+            "15m": "1h",  # 15m uses 1h ATR
+            "1h": "4h",  # 1h uses 4h ATR
+            "4h": "1d",  # 4h uses 1d for reference but has fixed cooldown
+            "1d": None,  # 1d has no higher reference
+            # Legacy intervals
+            "30m": "1h",
+            "2h": "4h",
+            "6h": "1d",
+            "8h": "1d",
+            "12h": "1d",
+            "3m": "15m",  # Add missing legacy intervals
+            "1m": "5m",
         }
-        # Default cooldown if interval not found
-        self.default_cooldown_minutes = 60
-        # Signal strength threshold for cooldown override
-        self.override_strength_threshold = 8.0
+
+        # Batched alerts storage: {symbol: {alert_type: [messages]}}
+        self.batched_alerts = {}
+        # Last batch send time
+        self.last_batch_send = {}
+        # Current interval for this manager instance
+        self.current_interval = None
+        # Current user ID for alert identification
+        self.current_user_id = "unknown"
 
     def add_alert(self, alert: AlertCondition):
         """Add alert condition for a symbol"""
         if alert.symbol not in self.alerts:
             self.alerts[alert.symbol] = []
+
+        # Set the interval on the alert condition
+        alert.interval = self.current_interval
+
         self.alerts[alert.symbol].append(alert)
+
+        # Use more concise logging to prevent spam
+        if AlertManager._verbose_logging:
+            logger.debug(
+                f"Added {type(alert).__name__} for {alert.symbol} with interval {alert.interval}"
+            )
 
     def remove_alert(self, symbol: str, alert_type: type):
         """Remove all alerts of a specific type for a symbol"""
@@ -602,7 +647,66 @@ class AlertManager:
             # Base strength for pattern signals is slightly higher
             strength = 6.0
 
-        return strength
+        # Extract interval from message to adjust signal strength
+        interval = None
+        if "(" in message and ")" in message:
+            interval_part = message.split("(")[1].split(")")[0]
+            if interval_part in self.atr_reference_intervals:
+                interval = interval_part
+
+        # Adjust strength based on timeframe - higher timeframes get priority
+        if interval:
+            # Higher timeframes get a strength boost
+            if interval == "4h" or interval == "1d":
+                strength += 3.0  # Significant boost for 4h/1d signals
+            elif interval == "1h" or interval == "2h":
+                strength += 1.5  # Medium boost for 1h/2h
+            elif interval == "15m" or interval == "30m":
+                strength += 0.5  # Small boost for 15m/30m
+
+        return min(10.0, strength)  # Cap at 10.0
+
+    def _is_high_volatility_session(self) -> bool:
+        """Check if current time is during a high-volatility session (London/NY overlap)
+
+        Returns:
+        --------
+        bool
+            True if current time is during London/NY overlap (13:00-16:00 UTC)
+        """
+        now = datetime.utcnow()
+        hour = now.hour
+
+        # London/NY overlap typically 13:00-16:00 UTC
+        return 13 <= hour < 16
+
+    def _get_atr_adjusted_cooldown(
+        self, base_cooldown: int, interval: str, symbol: str, market_data=None
+    ) -> int:
+        """
+        DEPRECATED: This method is now handled by CooldownService
+
+        Calculate cooldown adjusted for market volatility based on ATR
+
+        Redirects to CooldownService for the actual implementation
+        """
+        try:
+            from bot.services.cooldown_service import get_cooldown_service
+
+            # Get the CooldownService instance
+            service = get_cooldown_service()
+
+            # Use the service's implementation
+            return service._get_atr_adjusted_cooldown(
+                base_cooldown, interval, symbol, market_data
+            )
+
+        except ImportError:
+            # If we can't import the service, throw an error
+            raise ImportError(
+                "CooldownService is required but not available. "
+                "Please ensure bot/services/cooldown_service.py exists and is properly set up."
+            )
 
     def _is_globally_cooled_down(
         self,
@@ -611,6 +715,7 @@ class AlertManager:
         alert_subtype: str = None,
         interval: str = None,
         message: str = None,
+        market_data=None,
     ) -> bool:
         """Check if an alert type for a symbol is in global cooldown
 
@@ -626,6 +731,8 @@ class AlertManager:
             Timeframe of the current alert (e.g., '5m', '1h', '4h')
         message : str, optional
             Alert message text, used to calculate signal strength
+        market_data : pd.DataFrame, optional
+            Market data with ATR calculated (if available)
 
         Returns:
         --------
@@ -633,96 +740,222 @@ class AlertManager:
             True if the alert can trigger (NOT in cooldown)
             False if the alert should not trigger (IS in cooldown)
         """
-        now = datetime.now()
-
-        # Create a unique cooldown key that is independent of interval
-        cooldown_key = f"{symbol}"
-        if alert_subtype:
-            cooldown_key = f"{symbol}_{alert_subtype}"
-        else:
-            cooldown_key = f"{symbol}_{alert_type}"
-
-        # Log cooldown check attempt - this should always show up
-        logger.info(
-            f"Checking cooldown for {cooldown_key} (Interval: {interval or 'unknown'})"
-        )
-
-        # If this alert type has never been triggered, it's not in cooldown
-        if cooldown_key not in AlertManager.global_cooldowns:
-            logger.info(f"No previous cooldown found for {cooldown_key}")
-            return True
-
-        # Calculate signal strength for the current alert
-        current_strength = 5.0  # Default strength
+        # Calculate signal strength - used by multiple code paths
+        signal_strength = 5.0  # Default strength
         if message:
-            current_strength = self._calculate_signal_strength(
+            signal_strength = self._calculate_signal_strength(
                 alert_type, alert_subtype or "", message
             )
 
-        # Get cooldown info for this alert
-        cooldown_info = AlertManager.global_cooldowns[cooldown_key]
+        # Get the CooldownService instance
+        try:
+            from bot.services.cooldown_service import get_cooldown_service
+            from bot.services.feature_flags import get_flag
 
-        # Log the cooldown info to debug dictionary structure
-        logger.info(f"Cooldown info for {cooldown_key}: {cooldown_info}")
+            service = get_cooldown_service()
 
-        # Extract data from cooldown_info dictionary
-        last_triggered = cooldown_info.get("timestamp")
-        last_interval = cooldown_info.get("interval", "unknown")
-        last_strength = cooldown_info.get("strength", 5.0)
-
-        # Determine cooldown period based on last triggered interval
-        cooldown_minutes = self.timeframe_cooldowns.get(
-            last_interval, self.default_cooldown_minutes
-        )
-        cooldown_period = timedelta(minutes=cooldown_minutes)
-
-        logger.info(
-            f"Using {cooldown_minutes} minute cooldown for {last_interval} timeframe"
-        )
-
-        # Check if cooldown period has passed
-        time_since_last = now - last_triggered
-        if time_since_last < cooldown_period:
-            # Still in cooldown, but check for strength override
-            minutes_remaining = int(
-                (cooldown_period - time_since_last).total_seconds() / 60
+            # Check cooldown using the service
+            is_in_cooldown = service.is_in_cooldown(
+                symbol,
+                alert_type,
+                alert_subtype,
+                interval,
+                message,
+                signal_strength,
+                market_data,
             )
 
-            # Calculate how much of the cooldown has passed (as a ratio)
-            cooldown_progress = (
-                time_since_last.total_seconds() / cooldown_period.total_seconds()
-            )
+            # Check for overrides using the override engine if needed
+            if is_in_cooldown and get_flag("ENABLE_OVERRIDE_ENGINE", False):
+                logger.debug(f"Using OverrideEngine for {symbol} {alert_type}")
+                try:
+                    from bot.services.override_engine import get_override_engine
 
-            logger.info(
-                f"{cooldown_key} is in cooldown: {minutes_remaining} minutes remaining. "
-                f"Current strength: {current_strength:.1f}, Previous: {last_strength:.1f}, "
-                f"Progress: {cooldown_progress:.1%}"
-            )
+                    engine = get_override_engine()
 
-            # Strong signals can override cooldown if:
-            # 1. Current signal is significantly stronger than the previous one
-            # 2. At least 30% of cooldown period has passed
-            # 3. Signal is above the override strength threshold
-            if (
-                current_strength > last_strength + 2.0  # Significantly stronger
-                and cooldown_progress > 0.3  # At least 30% of cooldown has passed
-                and current_strength
-                >= self.override_strength_threshold  # Strong enough to override
-            ):
-                logger.info(
-                    f"Strong signal ({current_strength:.1f}) overriding cooldown for {cooldown_key}. "
-                    f"Previous strength: {last_strength:.1f}, Cooldown progress: {cooldown_progress:.1%}"
+                    # Get cooldown info for potential override checks
+                    cooldown_info = service.get_cooldown_info(
+                        symbol, alert_type, alert_subtype
+                    )
+                    if cooldown_info:
+                        last_triggered = cooldown_info.get(
+                            "timestamp", datetime.utcnow()
+                        )
+                        last_interval = cooldown_info.get("interval", interval)
+                        last_strength = cooldown_info.get("strength", 5.0)
+
+                        # Determine base cooldown period from cooldown service
+                        base_cooldown_minutes = service.timeframe_cooldowns.get(
+                            last_interval, service.default_cooldown_minutes
+                        )
+
+                        cooldown_period = timedelta(minutes=base_cooldown_minutes)
+                        time_elapsed = datetime.utcnow() - last_triggered
+
+                        # Check if override engine allows override
+                        can_override, reason = engine.can_override(
+                            alert_type=alert_type,
+                            alert_subtype=alert_subtype or "",
+                            current_strength=signal_strength,
+                            last_strength=last_strength or 5.0,
+                            interval=interval or "unknown",
+                            last_interval=last_interval,
+                            time_elapsed=time_elapsed,
+                            cooldown_period=cooldown_period,
+                            message=message,
+                        )
+
+                        if can_override:
+                            logger.info(f"Override allowed: {reason}")
+
+                            # Check if we should send batched alerts or just bypass the cooldown
+                            if get_flag("ENABLE_BATCH_AGGREGATOR", False):
+                                # Queue for batch aggregator instead of sending immediately
+                                self._queue_for_batching(
+                                    symbol,
+                                    alert_type,
+                                    alert_subtype or "",
+                                    message,
+                                    interval or "unknown",
+                                )
+                                # Return False to indicate we're not sending immediately
+                                return False
+                            else:
+                                # No batch aggregator, send immediately
+                                return True
+                        else:
+                            logger.debug(f"Override denied: {reason}")
+
+                except (ImportError, Exception) as e:
+                    logger.error(f"Error checking override: {e}")
+
+            # Queue for batch aggregator if in cooldown but batch aggregator is enabled
+            if is_in_cooldown and get_flag("ENABLE_BATCH_AGGREGATOR", False):
+                self._queue_for_batching(
+                    symbol,
+                    alert_type,
+                    alert_subtype or "",
+                    message,
+                    interval or "unknown",
                 )
-                return True
 
-            # Not overriding, remain in cooldown
-            return False
+            # Return opposite of is_in_cooldown (True = can trigger)
+            return not is_in_cooldown
 
-        # Cooldown period has passed
-        logger.info(
-            f"Cooldown passed for {cooldown_key} (elapsed: {time_since_last.total_seconds()/60:.1f} minutes)"
-        )
-        return True
+        except ImportError:
+            # If we can't import the service, throw an error - we no longer support legacy mode
+            raise ImportError(
+                "CooldownService is required but not available. "
+                "Please ensure bot/services/cooldown_service.py exists and is properly set up."
+            )
+
+    def _queue_for_batching(
+        self,
+        symbol: str,
+        alert_type: str,
+        alert_subtype: str,
+        message: str,
+        interval: str,
+    ):
+        """Queue alert for batched sending when cooldown expires
+
+        Parameters:
+        -----------
+        symbol : str
+            Trading pair symbol
+        alert_type : str
+            Alert class name
+        alert_subtype : str
+            Alert subtype
+        message : str
+            Alert message
+        interval : str
+            Timeframe of the alert
+        """
+        if not message:
+            return
+
+        try:
+            # Import and use the BatchAggregator service
+            from bot.services.batch_aggregator import get_batch_aggregator
+            from bot.services.feature_flags import get_flag
+
+            # Calculate signal strength
+            signal_strength = self._calculate_signal_strength(
+                alert_type, alert_subtype or "", message
+            )
+
+            # Get user ID from instance if available
+            user_id = getattr(self, "current_user_id", "unknown")
+
+            # Only use batch aggregator if enabled by feature flag
+            if get_flag("ENABLE_BATCH_AGGREGATOR", False):
+                batch_aggregator = get_batch_aggregator()
+                batch_aggregator.enqueue(
+                    user_id=user_id,
+                    symbol=symbol,
+                    interval=interval,
+                    alert_type=alert_type,
+                    alert_subtype=alert_subtype,
+                    alert_msg=message,
+                    strength=signal_strength,
+                )
+                logger.info(
+                    f"Queued alert for batch aggregator: {symbol} - {alert_type} ({interval})"
+                )
+            else:
+                # BatchAggregator service is disabled, log warning
+                logger.warning(
+                    f"BatchAggregator service is disabled. Enable with ENABLE_BATCH_AGGREGATOR flag."
+                )
+
+        except ImportError:
+            # If we can't import the service, throw an error - we no longer support legacy mode
+            raise ImportError(
+                "BatchAggregator is required but not available. "
+                "Please ensure bot/services/batch_aggregator.py exists and is properly set up."
+            )
+
+    def get_batched_alerts(self, symbol: str = None) -> Dict[str, List[Dict]]:
+        """Get batched alerts for a symbol or all symbols
+
+        Parameters:
+        -----------
+        symbol : str, optional
+            Symbol to get batched alerts for. If None, get all batched alerts.
+
+        Returns:
+        --------
+        Dict[str, List[Dict]]
+            Dictionary of batched alerts by symbol
+        """
+        try:
+            # Import and use the BatchAggregator service
+            from bot.services.batch_aggregator import get_batch_aggregator
+            from bot.services.feature_flags import get_flag
+
+            # Only use batch aggregator if enabled by feature flag
+            if get_flag("ENABLE_BATCH_AGGREGATOR", False):
+                batch_aggregator = get_batch_aggregator()
+                # Process the batched alerts in the service
+                # The batch aggregator's processing should happen automatically
+                # based on its own timers, but we can trigger it manually if needed
+                return (
+                    {}
+                )  # Return empty dict since actual processing happens via callbacks
+            else:
+                # BatchAggregator service is disabled, log warning
+                logger.warning(
+                    f"BatchAggregator service is disabled. Enable with ENABLE_BATCH_AGGREGATOR flag."
+                )
+                return {}
+
+        except ImportError:
+            # If we can't import the service, throw an error - we no longer support legacy mode
+            raise ImportError(
+                "BatchAggregator is required but not available. "
+                "Please ensure bot/services/batch_aggregator.py exists and is properly set up."
+            )
 
     def _update_global_cooldown(
         self,
@@ -747,38 +980,33 @@ class AlertManager:
         message : str, optional
             Alert message text, used to calculate signal strength
         """
-        # Create a unique cooldown key that is independent of interval
-        cooldown_key = f"{symbol}"
-        if alert_subtype:
-            cooldown_key = f"{symbol}_{alert_subtype}"
-        else:
-            cooldown_key = f"{symbol}_{alert_type}"
+        try:
+            from bot.services.cooldown_service import get_cooldown_service
 
-        # Calculate signal strength
-        strength = 5.0  # Default strength
-        if message:
-            strength = self._calculate_signal_strength(
-                alert_type, alert_subtype or "", message
+            # Get the CooldownService instance
+            cooldown_service_instance = get_cooldown_service()
+
+            # Calculate signal strength
+            signal_strength = 5.0  # Default strength
+            if message:
+                signal_strength = self._calculate_signal_strength(
+                    alert_type, alert_subtype or "", message
+                )
+
+            # Update cooldown using the service
+            cooldown_service_instance.update_cooldown(
+                symbol, alert_type, alert_subtype, interval, signal_strength
             )
 
-        # Update the shared class variable with current time, interval and strength
-        cooldown_data = {
-            "timestamp": datetime.now(),
-            "interval": interval or "unknown",
-            "strength": strength,
-        }
-
-        # Store the cooldown information
-        AlertManager.global_cooldowns[cooldown_key] = cooldown_data
-
-        # Always log at INFO level for debugging
-        logger.info(
-            f"Set cooldown for {cooldown_key}: Interval={interval}, Strength={strength:.1f}"
-        )
-        logger.info(f"Cooldown data: {cooldown_data}")
+        except ImportError:
+            # If we can't import the service, throw an error - we no longer support legacy mode
+            raise ImportError(
+                "CooldownService is required but not available. "
+                "Please ensure bot/services/cooldown_service.py exists and is properly set up."
+            )
 
     def check_alerts(
-        self, symbol: str, df: pd.DataFrame, interval: str = None
+        self, symbol: str, df: pd.DataFrame, interval: str = None, market_data=None
     ) -> List[str]:
         """Check all alerts for a symbol and return triggered messages
 
@@ -790,12 +1018,16 @@ class AlertManager:
             OHLCV data for the symbol
         interval : str, optional
             Timeframe of the data (e.g., '5m', '1h', '4h')
+        market_data : pd.DataFrame, optional
+            Additional market data with ATR information
         """
         if symbol not in self.alerts:
             logger.debug(f"No alerts registered for {symbol}")
             return []
 
-        logger.debug(f"Checking {len(self.alerts[symbol])} alerts for {symbol}")
+        alert_count = len(self.alerts[symbol])
+        # Log only once to avoid excessive logging
+        logger.debug(f"Checking {alert_count} alerts for {symbol}")
 
         triggered = []
         for alert in self.alerts[symbol]:
@@ -817,7 +1049,7 @@ class AlertManager:
 
                 # First check global cooldown (across timeframes)
                 if not self._is_globally_cooled_down(
-                    symbol, alert_type, alert_subtype, interval, message
+                    symbol, alert_type, alert_subtype, interval, message, market_data
                 ):
                     logger.debug(
                         f"Skipping {alert_type} ({alert_subtype}) for {symbol} due to global cooldown"
@@ -852,6 +1084,18 @@ class AlertManager:
         self.add_alert(VolumeSpikeAlert(symbol))
         self.add_alert(AdxAlert(symbol))
         self.add_alert(PatternAlert(symbol))
+
+    def set_user_id(self, user_id: str):
+        """Set the user ID for this AlertManager instance
+
+        Parameters:
+        -----------
+        user_id : str
+            User ID to associate with alerts from this manager
+        """
+        self.current_user_id = user_id
+        logger.debug(f"Set user_id to {user_id} for AlertManager")
+        return self
 
 
 # Testing functionality
