@@ -16,10 +16,16 @@ from bot.binance import fetch_market_data
 from bot.db import get_db
 from bot.scheduler import get_scheduler
 
+try:
+    from bot.services.feature_flags import get_flag, reload_flags, set_flag
+
+    FEATURE_FLAGS_AVAILABLE = True
+except ImportError:
+    FEATURE_FLAGS_AVAILABLE = False
+    logger.warning("Feature flags module not available")
+
 # Set up logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# logging.basicConfig is now handled in main.py
 logger = logging.getLogger("trading_alerts.discord_bot")
 
 # Load environment variables
@@ -308,9 +314,37 @@ class TradingAlertsBot(discord.Client):
                         else:
                             reformatted_alert = f"{user_mention}\n{clean_alert}"
 
-                        # Create embed with interval in title
+                        # Customize title based on whether this is a batch summary or regular alert
+                        is_batch_summary = "ALERT SUMMARY" in clean_alert
+
+                        if is_batch_summary:
+                            # Count how many alerts are in the summary
+                            alert_count = 0
+                            # Look for lines like "1.", "2.", etc.
+                            for line in clean_alert.split("\n"):
+                                if line.strip().startswith(("1.", "2.", "3.")):
+                                    alert_count += 1
+
+                            # Extract the total count from the "more signals" line
+                            more_signals = 0
+                            for line in clean_alert.split("\n"):
+                                if "more signals not shown" in line:
+                                    try:
+                                        more_signals = int(
+                                            line.split("_")[1].split()[0]
+                                        )
+                                    except:
+                                        pass
+
+                            total_alerts = alert_count + more_signals
+                            title = f"🔔 Batch Summary: {symbol} ({total_alerts} alerts)"
+                        else:
+                            # Regular alert
+                            title = f"⚠️ Alert: {symbol} ({interval})"
+
+                        # Create embed with custom title
                         embed = discord.Embed(
-                            title=f"⚠️ Alert: {symbol} ({interval})",
+                            title=title,
                             description=reformatted_alert,
                             color=self._get_color_for_alert(alert),
                         )
@@ -1737,6 +1771,143 @@ async def cleanup_command(interaction: discord.Interaction, count: int = 50):
         await interaction.followup.send(
             f"❌ Error during cleanup: {str(e)}", ephemeral=True
         )
+
+
+@bot.tree.command(
+    name="feature_flags", description="Manage feature flags (bot owner only)"
+)
+@app_commands.describe(
+    action="Action to perform on feature flags",
+    flag="Feature flag to modify",
+    value="New value for the flag",
+)
+@app_commands.choices(
+    action=[
+        app_commands.Choice(name="list", value="list"),
+        app_commands.Choice(name="set", value="set"),
+        app_commands.Choice(name="reload", value="reload"),
+    ],
+    flag=[
+        app_commands.Choice(
+            name="ENABLE_COOLDOWN_SERVICE", value="ENABLE_COOLDOWN_SERVICE"
+        ),
+        app_commands.Choice(
+            name="ENABLE_OVERRIDE_ENGINE", value="ENABLE_OVERRIDE_ENGINE"
+        ),
+        app_commands.Choice(
+            name="ENABLE_BATCH_AGGREGATOR", value="ENABLE_BATCH_AGGREGATOR"
+        ),
+    ],
+)
+async def feature_flags_command(
+    interaction: discord.Interaction,
+    action: str,
+    flag: Optional[str] = None,
+    value: Optional[str] = None,
+):
+    """Manage feature flags (bot owner only)"""
+    if not FEATURE_FLAGS_AVAILABLE:
+        await interaction.response.send_message(
+            "Feature flags module is not available.", ephemeral=True
+        )
+        return
+
+    # Check if user is the bot owner
+    bot_owner = os.getenv("BOT_OWNER_ID")
+    if not bot_owner or interaction.user.id != int(bot_owner):
+        await interaction.response.send_message(
+            "This command is limited to the bot owner only.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    if action == "list":
+        # Get all feature flags
+        db = get_db()
+        flags = db.get_all_system_settings("feature_flags")
+
+        # Build an embed
+        embed = discord.Embed(
+            title="Feature Flags",
+            description="Current feature flag settings",
+            color=discord.Color.blue(),
+        )
+
+        # Add default flags
+        embed.add_field(
+            name="From Environment Variables",
+            value="\n".join(
+                [
+                    f"**{flag}**: `{get_flag(flag)}`"
+                    for flag in [
+                        "ENABLE_COOLDOWN_SERVICE",
+                        "ENABLE_OVERRIDE_ENGINE",
+                        "ENABLE_BATCH_AGGREGATOR",
+                    ]
+                ]
+            ),
+            inline=False,
+        )
+
+        # Add database flags
+        if flags:
+            embed.add_field(
+                name="From Database",
+                value="\n".join([f"**{f['key']}**: `{f['value']}`" for f in flags]),
+                inline=False,
+            )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    elif action == "set":
+        if not flag:
+            await interaction.followup.send(
+                "Please specify a flag to set.", ephemeral=True
+            )
+            return
+
+        if value is None:
+            await interaction.followup.send(
+                "Please specify a value for the flag.", ephemeral=True
+            )
+            return
+
+        # Convert value to appropriate type
+        converted_value = value
+        if value.lower() in ("true", "yes"):
+            converted_value = True
+        elif value.lower() in ("false", "no"):
+            converted_value = False
+        elif value.isdigit():
+            converted_value = int(value)
+
+        # Set the flag
+        set_flag(flag, converted_value)
+
+        # Also store in database
+        db = get_db()
+        db.set_system_setting(
+            "feature_flags",
+            flag,
+            str(converted_value),
+            f"Feature flag set by {interaction.user} on {datetime.now()}",
+        )
+
+        await interaction.followup.send(
+            f"Feature flag {flag} set to {converted_value}", ephemeral=True
+        )
+
+    elif action == "reload":
+        # Reload flags
+        flags = reload_flags()
+
+        await interaction.followup.send(
+            f"Feature flags reloaded. Current settings: {flags}", ephemeral=True
+        )
+
+    else:
+        await interaction.followup.send(f"Unknown action: {action}", ephemeral=True)
 
 
 # Run the bot
