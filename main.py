@@ -7,21 +7,39 @@ import sys
 import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
+from logging.handlers import RotatingFileHandler
 
-from bot.db import get_db
-from bot.discord_bot import bot, run_bot
-from bot.scheduler import get_scheduler
+# Configure logging BEFORE any internal imports to ensure it takes effect first
+# Force root logger configuration even if it's already been configured
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
 
-# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(), logging.FileHandler("bot.log")],
+    handlers=[
+        logging.StreamHandler(),  # Console handler
+        RotatingFileHandler(
+            "bot.log",  # Log to bot.log
+            maxBytes=10 * 1024 * 1024,  # 10 MB
+            backupCount=5,  # Keep 5 backup copies
+            encoding="utf-8",
+        ),
+    ],
 )
-logger = logging.getLogger("trading_alerts")
+
+# Now import internal modules after logging is configured
+from bot.db import DatabaseManager, get_db
+from bot.discord_bot import bot, run_bot
+from bot.scheduler import get_scheduler
+
+logger = logging.getLogger("discord_trading_alerts")
 
 # Set DEBUG level specifically for the alerts module
 logging.getLogger("bot.alerts").setLevel(logging.DEBUG)
+# Set DEBUG level for the scheduler module
+logging.getLogger("discord_trading_alerts.scheduler").setLevel(logging.DEBUG)
 
 # Ensure data directory exists
 os.makedirs("data", exist_ok=True)
