@@ -38,7 +38,7 @@ A live Discord bot that tracks crypto pairs using real-time Binance data and not
 
 The bot uses an advanced alert cooling system to prevent alert spam while ensuring you don't miss important signals:
 
-### Signal Strength Prioritization
+## Signal Strength Prioritization
 Strong signals can override cooldowns when they're significantly more important:
 - Extreme indicator readings (e.g., RSI below 20, ADX above 40)
 - Higher timeframe signals get priority
@@ -83,6 +83,8 @@ Strong signals can override cooldowns when they're significantly more important:
 - [X] Decoupled checking frequency - check all timeframes more frequently regardless of their interval
 - [X] Global cooldown system to prevent duplicate alerts across timeframes
 - [X] Smart cooldown system with timeframe-based cooldowns and signal strength prioritization
+
+- [ ] Fix batch summary formatting and timestamps, add reaction to display rest of signals
 - [ ] `/monitor` command to display permanent embeds with live crypto pair prices and current indicator statuses
 - [ ] Config centralization - move all thresholds, periods, jitter %, etc. into a central YAML/JSON config for runtime tweaks
 - [ ] Optional price change alerts
