@@ -38,13 +38,7 @@ A live Discord bot that tracks crypto pairs using real-time Binance data and not
 
 The bot uses an advanced alert cooling system to prevent alert spam while ensuring you don't miss important signals:
 
-### Timeframe-Based Cooldowns
-Different timeframes have appropriate cooldown periods:
-- Short timeframes (1m-5m): 15-30 minute cooldowns
-- Medium timeframes (15m-1h): 1-3 hour cooldowns
-- Long timeframes (4h-1d): 12-48 hour cooldowns
-
-### Signal Strength Prioritization
+### Signal Strength Prioritization (Current)
 Strong signals can override cooldowns when they're significantly more important:
 - Extreme indicator readings (e.g., RSI below 20, ADX above 40)
 - Higher timeframe signals get priority
@@ -52,38 +46,34 @@ Strong signals can override cooldowns when they're significantly more important:
 
 This ensures you get timely alerts for truly significant market events while avoiding notification fatigue.
 
----
+### 🚀 Cooling System Enhancements (Planned)
+The following enhancements are prioritized for implementation:
 
-## 🚀 Quick Start
+1. **ATR-Based Dynamic Cooldowns**
+   - 5m: 20 min base cooldown (±5 min based on 30-min ATR)
+   - 15m: 1h base cooldown (±15 min based on 1h ATR)
+   - 1h: 2h base cooldown (±30 min based on 4h ATR)
+   - 4h: 24h base cooldown (fixed)
 
-### 1. Clone the repo
+2. **Market Volatility Adjustments**
+   - ATR percentile mapping: Top 25% → +25% cooldown, Bottom 25% → -25% cooldown
+   - High-volatility session handling: +10% cooldown on 5m and 15m during London/NY overlap
 
-```bash
-git clone https://github.com/gabrielsaban/discord-trading-alerts.git
-cd discord-trading-alerts
-```
+3. **Enhanced Override Logic**
+   - 4h/1d signals bypass all lower-tf cooldowns, then enter their own 24h duplicate-block cooldown
+   - Extreme readings override active cooldowns on same timeframe (RSI < 20 or > 80, ADX > 40)
+   - Medium signals can override shorter timeframe cooldowns if strength metric exceeds threshold
 
-### 2. Set up virtual environment
+4. **Alert Grouping & Batching**
+   - Group similar alerts during cooldown periods
+   - Send summary with top 2 strongest signals when multiple alerts trigger
+   - Include timestamps, strength metrics and price data in grouped summaries
 
-```bash
-python -m venv .venv
-source .venv/bin/activate  # on Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
+5. **Testing & Iteration**
+   - Run historical replay to measure spam reduction vs. missed high-confidence signals
+   - Adjust thresholds to hit ≥50% fewer alerts with <5% missed setups
+   - Fine-tune ATR sensitivity and override logic based on backtesting results
 
-### 3. Configure environment variables
-
-Create a `.env` file:
-
-```dotenv
-DISCORD_BOT_TOKEN=your_discord_token
-```
-
-### 4. Run the bot
-
-```bash
-python main.py
-```
 ---
 
 ## ⚙️ Commands
@@ -97,46 +87,19 @@ python main.py
 
 ---
 
-## 📦 Project Structure
-
-```
-discord-trading-alerts/
-├── bot/
-│   ├── indicators.py       # RSI, MACD, EMA logic
-│   ├── binance.py          # API fetching & OHLC formatting
-│   ├── alerts.py           # Trigger logic
-│   ├── scheduler.py        # APScheduler integration
-│   ├── db.py               # SQLite user storage
-│   └── discord_bot.py      # Command logic
-├── data/
-│   └── alerts.db           # SQLite database
-├── tests/
-│   ├── test_indicators.py  # Unit tests for indicators
-│   ├── test_binance.py     # Tests for the Binance API
-│   └── conftest.py         # Test fixtures
-├── .env
-├── requirements.txt
-├── README.md
-└── main.py
-```
-
----
-
 ## 📅 Roadmap
 
 - [X] User-defined indicator thresholds
-- [ ] `/monitor` command to display permanent embeds with live crypto pair prices and current indicator statuses
-- [ ] `/status` command to show countdown timers until next check for each watched pair
 - [X] Decoupled checking frequency - check all timeframes more frequently regardless of their interval
 - [X] Global cooldown system to prevent duplicate alerts across timeframes
 - [X] Smart cooldown system with timeframe-based cooldowns and signal strength prioritization
-- [ ] Alert-based watching - users select specific alerts they want rather than intervals, and the system manages which timeframes to check
+- [ ] `/monitor` command to display permanent embeds with live crypto pair prices and current indicator statuses
 - [ ] Config centralization - move all thresholds, periods, jitter %, etc. into a central YAML/JSON config for runtime tweaks
-- [ ] More customizable alert settings and notification options
+- [ ] Optional price change alerts
 - [ ] Process separation - run the scheduler as a dedicated microservice to maintain alert timing during bot restarts
 
 - [ ] Web dashboard (Flask/FastAPI)
-- [ ] Telegram version
+- [ ] Telegram, email version/integrations
 - [ ] Stocks integration (`yfinance`)
 
 ---
