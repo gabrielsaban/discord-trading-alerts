@@ -15,13 +15,24 @@ from logging.handlers import RotatingFileHandler
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
 
+# Delete existing log file contents to start fresh
+log_file = "bot.log"
+try:
+    # Check if file exists before attempting to truncate it
+    if os.path.exists(log_file):
+        # Open the file in write mode, which truncates the file
+        with open(log_file, "w") as f:
+            pass  # No need to write anything, just truncate
+except Exception as e:
+    print(f"Error clearing log file: {e}")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),  # Console handler
         RotatingFileHandler(
-            "bot.log",  # Log to bot.log
+            log_file,  # Log to bot.log
             maxBytes=10 * 1024 * 1024,  # 10 MB
             backupCount=5,  # Keep 5 backup copies
             encoding="utf-8",
