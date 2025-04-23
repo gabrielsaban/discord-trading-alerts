@@ -2,19 +2,22 @@ import logging
 import os
 import sqlite3
 import sys
+from datetime import datetime, timedelta
 from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
 import pytest
 
-# Ensure bot module is in path for tests
+# Add the parent directory to path so we can import the bot modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Configure logging for tests
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Configure test logging only if not already configured
+if not logging.root.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
 
 from bot.alerts import AlertCondition, AlertManager
 
