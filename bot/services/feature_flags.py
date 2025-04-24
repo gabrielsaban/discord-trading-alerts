@@ -13,10 +13,10 @@ _flags_lock = threading.RLock()
 
 # Default flags
 DEFAULT_FLAGS = {
-    "ENABLE_COOLDOWN_SERVICE": True,  # Default off
-    "ENABLE_OVERRIDE_ENGINE": True,  # Default off
-    "ENABLE_BATCH_AGGREGATOR": True,  # Default off
-    "DEBUG_LOG_OVERRIDES": True,  # Default off
+    "ENABLE_COOLDOWN_SERVICE": True,  # Enable cooldown service
+    "ENABLE_OVERRIDE_ENGINE": True,   # Enable override engine
+    "ENABLE_BATCH_AGGREGATOR": False, # Disable batch aggregator
+    "DEBUG_LOG_OVERRIDES": True,      # Enable debug logging for overrides
 }
 
 
