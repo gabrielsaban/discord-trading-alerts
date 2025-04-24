@@ -43,23 +43,9 @@ DEFAULT_INTERVALS = {
 
 # Time between each alert check based on frequency tier
 CHECK_FREQUENCY = {
-    "high": 60,  # High frequency: check every minute
-    "medium": 300,  # Medium frequency: check every 5 minutes
-    "low": 900,  # Low frequency: check every 15 minutes
-}
-
-# Configuration for ATR-based dynamic cooldowns
-ATR_CONFIG = {
-    "5m": {"reference_interval": "30m"},
-    "15m": {"reference_interval": "1h"},
-    "1h": {"reference_interval": "4h"},
-    "4h": {"reference_interval": "1d"},
-    "1d": {"reference_interval": None},
-    # Legacy intervals use the most appropriate reference interval
-    "30m": {"reference_interval": "1h"},
-    "2h": {"reference_interval": "4h"},
-    "6h": {"reference_interval": "1d"},
-    "12h": {"reference_interval": "1d"},
+    "high": 120,     # High frequency: check every 2 minutes (was 60)
+    "medium": 600,   # Medium frequency: check every 10 minutes (was 300)
+    "low": 1800,     # Low frequency: check every 30 minutes (was 900)
 }
 
 # Map intervals to frequency tiers
@@ -68,8 +54,8 @@ INTERVAL_FREQUENCY_MAP = {
     "1m": "high",
     "3m": "high",
     "5m": "high",
-    "15m": "high",
     # Medium frequency
+    "15m": "medium",  # Moved from high to medium frequency
     "30m": "medium",
     "1h": "medium",
     "2h": "medium",
@@ -153,12 +139,6 @@ class AlertScheduler:
             "medium": set(),
             "low": set(),
         }  # Organize symbols by frequency tier
-
-        # Cache for ATR calculations to avoid recalculation
-        # {symbol: {interval: {"data": df, "timestamp": datetime}}}
-        self.atr_cache = {}
-        # How long to keep ATR cache entries (in seconds)
-        self.ATR_CACHE_TTL = 3600  # 1 hour
 
         # We'll prefer to use Discord's event loop rather than creating our own
         self.discord_loop = None
@@ -421,7 +401,7 @@ class AlertScheduler:
 
         This is called periodically by the scheduler for each frequency tier
         """
-        logger.info(f"Running {frequency_tier} frequency tier check")
+        logger.debug(f"Running {frequency_tier} frequency tier check")
 
         # Make a copy to avoid modification during iteration
         with self.lock:
@@ -437,71 +417,6 @@ class AlertScheduler:
 
                 logger.error(traceback.format_exc())
 
-    def _get_cached_atr_data(self, symbol, interval, force_refresh=False):
-        """Get ATR data from cache or calculate if needed
-
-        Parameters:
-        -----------
-        symbol : str
-            Trading pair symbol
-        interval : str
-            Interval for ATR calculation
-        force_refresh : bool
-            Whether to force refresh even if cache is valid
-
-        Returns:
-        --------
-        pd.DataFrame or None
-            DataFrame with ATR data or None if calculation failed
-        """
-        now = datetime.utcnow()
-
-        # Check if we have cached data
-        if (
-            not force_refresh
-            and symbol in self.atr_cache
-            and interval in self.atr_cache[symbol]
-        ):
-            cache_entry = self.atr_cache[symbol][interval]
-            cache_time = cache_entry["timestamp"]
-
-            # Check if cache is still valid
-            if (now - cache_time).total_seconds() < self.ATR_CACHE_TTL:
-                return cache_entry["data"]
-
-        # Need to calculate ATR
-        try:
-            # Get candle data for the interval
-            df = fetch_market_data(
-                symbol=symbol,
-                interval=interval,
-                limit=DEFAULT_CANDLE_LIMITS.get(interval, 200),
-                force_refresh=force_refresh,
-            )
-
-            if df is None or df.empty:
-                logger.warning(
-                    f"Failed to fetch data for ATR calculation: {symbol} ({interval})"
-                )
-                return None
-
-            # Calculate ATR with percentiles
-            atr_data = calculate_atr(df, length=14, calculate_percentiles=True)
-
-            if atr_data is not None:
-                # Store in cache
-                if symbol not in self.atr_cache:
-                    self.atr_cache[symbol] = {}
-
-                self.atr_cache[symbol][interval] = {"data": atr_data, "timestamp": now}
-
-                return atr_data
-
-        except Exception as e:
-            logger.error(f"Error calculating ATR for {symbol} ({interval}): {e}")
-
-        return None
-
     def check_symbol_alerts(self, symbol: str, interval: str):
         """
         Check alerts for a specific symbol and interval
@@ -510,16 +425,18 @@ class AlertScheduler:
         """
         # We need a fresh database connection for each thread
         db = get_db()  # This will get a new connection for this thread
+        # Get the cooldown service for ATR reference intervals
+        cooldown_service = get_cooldown_service()
 
         with self.lock:
             # Update last run time
-            self.last_run[(symbol, interval)] = datetime.utcnow()
+            self.last_run[(symbol, interval)] = datetime.now() + timedelta(hours=1)
 
             # Set the next check time (used for status reporting)
             frequency_tier = INTERVAL_FREQUENCY_MAP.get(interval, "medium")
             seconds = CHECK_FREQUENCY.get(frequency_tier, 300)
-            self.next_check_time[(symbol, interval)] = datetime.utcnow() + timedelta(
-                seconds=seconds
+            self.next_check_time[(symbol, interval)] = datetime.now() + timedelta(
+                seconds=seconds, hours=1
             )
 
             logger.debug(f"Checking alerts for {symbol} ({interval})")
@@ -538,7 +455,7 @@ class AlertScheduler:
                 # If we're close to the end of the current candle, force refresh
                 if cached_df is not None and not cached_df.empty:
                     latest_time = cached_df.index[-1]
-                    now = datetime.utcnow()
+                    now = datetime.utcnow() + timedelta(hours=1)
                     # Use pandas to handle timezones properly
                     time_diff = (
                         now - pd.Timestamp(latest_time).to_pydatetime()
@@ -562,30 +479,34 @@ class AlertScheduler:
                     logger.warning(f"Failed to fetch data for {symbol} ({interval})")
                     return
 
-                # Calculate ATR for dynamic cooldown adjustments if this interval uses ATR
-                atr_data = None
-                market_data = None  # Default to None instead of df.copy()
+                # Calculate ATR for dynamic cooldown adjustments if needed
+                market_data = None  # Default to None
 
-                if (
-                    interval in ATR_CONFIG
-                    and ATR_CONFIG[interval]["reference_interval"]
-                ):
-                    # Get configuration
-                    atr_config = ATR_CONFIG[interval]
-                    ref_interval = atr_config["reference_interval"]
-
-                    # Get ATR data from cache or calculate
-                    atr_data = self._get_cached_atr_data(
-                        symbol, ref_interval, force_refresh
-                    )
-
-                    if atr_data is not None:
-                        # Extract just the values needed and pass as a dict instead of DataFrame
-                        market_data = {
-                            "ATR": atr_data["ATR"].iloc[-1],
-                            "ATR_Percent": atr_data["ATR_Percent"].iloc[-1],
-                            "ATR_Percentile": atr_data["ATR_Percentile"].iloc[-1],
-                        }
+                # Check if this interval has a reference interval for ATR-based cooldowns
+                ref_interval = cooldown_service.atr_reference_intervals.get(interval)
+                if ref_interval:
+                    try:
+                        # Fetch data for the reference interval
+                        ref_df = fetch_market_data(
+                            symbol=symbol,
+                            interval=ref_interval,
+                            limit=DEFAULT_CANDLE_LIMITS.get(ref_interval, 200),
+                            force_refresh=force_refresh,
+                        )
+                        
+                        if ref_df is not None and not ref_df.empty:
+                            # Calculate ATR directly
+                            atr_data = calculate_atr(ref_df, length=14, calculate_percentiles=True)
+                            
+                            if atr_data is not None:
+                                # Extract just the needed values
+                                market_data = {
+                                    "ATR": atr_data["ATR"].iloc[-1],
+                                    "ATR_Percent": atr_data["ATR_Percent"].iloc[-1],
+                                    "ATR_Percentile": atr_data["ATR_Percentile"].iloc[-1],
+                                }
+                    except Exception as e:
+                        logger.error(f"Error calculating ATR for {symbol} ({ref_interval}): {e}")
 
                 # Get users watching this symbol
                 users = db.get_users_watching_symbol(symbol, interval)
@@ -646,7 +567,7 @@ class AlertScheduler:
                     # Check for batched alerts ready to send
                     # Only process batches if BatchAggregator is enabled
                     if get_flag("ENABLE_BATCH_AGGREGATOR", True):
-                        now = datetime.utcnow()
+                        now = datetime.utcnow() + timedelta(hours=1)
                         last_batch_time = manager.last_batch_send.get(symbol, None)
 
                         if (
@@ -961,9 +882,6 @@ class AlertScheduler:
             # Clear user alert managers
             self.user_alert_managers.clear()
 
-            # Clear ATR cache
-            self.atr_cache.clear()
-
             # If we started our own asyncio event loop, stop it
             if self.use_own_loop and self.loop and self.loop.is_running():
                 logger.info("Stopping asyncio event loop...")
@@ -982,7 +900,7 @@ class AlertScheduler:
 
     def process_all_batched_alerts(self):
         """Process all batched alerts across all alert managers"""
-        logger.info("Processing all batched alerts")
+        logger.debug("Processing all batched alerts")
 
         try:
             # Use BatchAggregator service for processing
@@ -991,7 +909,7 @@ class AlertScheduler:
             # The batch_aggregator will handle the actual processing and callbacks
             # This method is mostly a scheduled trigger for processing batches
             if not get_flag("ENABLE_BATCH_AGGREGATOR", True):
-                logger.info("BatchAggregator service is disabled")
+                logger.debug("BatchAggregator service is disabled")
                 return
 
             # Trigger batch processing in the service
