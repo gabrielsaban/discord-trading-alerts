@@ -95,14 +95,11 @@ class AlertCondition(ABC):
         logger.debug(f"DEPRECATED can_trigger() called on {type(self).__name__}")
         return True  # Always allow AlertManager to handle cooldowns
 
-    def mark_triggered(self):
-        """
-        DEPRECATED: Use AlertManager._update_global_cooldown instead.
-        Legacy method for marking alerts as triggered - not used in current system.
-        """
-        logger.debug(f"DEPRECATED mark_triggered() called on {type(self).__name__}")
-        # Set the last_triggered time to maintain backward compatibility with tests
-        self.last_triggered = datetime.utcnow()
+    def mark_triggered(self, strength=None):
+        """Mark alert as triggered now, with optional strength value."""
+        self.triggered = True
+        self.last_triggered = datetime.utcnow() + timedelta(hours=1)
+        self.strength = strength if strength is not None else self.strength
 
     def format_price(self, price: float) -> str:
         """Format price based on magnitude"""
@@ -674,7 +671,7 @@ class AlertManager:
         bool
             True if current time is during London/NY overlap (13:00-16:00 UTC)
         """
-        now = datetime.utcnow()
+        now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
         hour = now.hour
 
         # London/NY overlap typically 13:00-16:00 UTC
@@ -751,6 +748,7 @@ class AlertManager:
         try:
             from bot.services.cooldown_service import get_cooldown_service
             from bot.services.feature_flags import get_flag
+            from bot.services.batch_aggregator import get_batch_aggregator
 
             service = get_cooldown_service()
 
@@ -779,7 +777,7 @@ class AlertManager:
                     )
                     if cooldown_info:
                         last_triggered = cooldown_info.get(
-                            "timestamp", datetime.utcnow()
+                            "timestamp", datetime.utcnow() + timedelta(hours=1)
                         )
                         last_interval = cooldown_info.get("interval", interval)
                         last_strength = cooldown_info.get("strength", 5.0)
@@ -790,7 +788,7 @@ class AlertManager:
                         )
 
                         cooldown_period = timedelta(minutes=base_cooldown_minutes)
-                        time_elapsed = datetime.utcnow() - last_triggered
+                        time_elapsed = (datetime.utcnow() + timedelta(hours=1)) - last_triggered
 
                         # Check if override engine allows override
                         can_override, reason = engine.can_override(
@@ -831,13 +829,26 @@ class AlertManager:
 
             # Queue for batch aggregator if in cooldown but batch aggregator is enabled
             if is_in_cooldown and get_flag("ENABLE_BATCH_AGGREGATOR", False):
-                self._queue_for_batching(
-                    symbol,
-                    alert_type,
-                    alert_subtype or "",
-                    message,
-                    interval or "unknown",
-                )
+                # Check if this exact alert was already sent to the batch aggregator recently
+                # This prevents duplicates when the same alert is triggered multiple times in quick succession
+                batch_aggregator = get_batch_aggregator()
+                
+                # Create a unique key for this specific alert
+                alert_key = f"{symbol}_{alert_type}_{alert_subtype or 'general'}_{interval or 'unknown'}"
+                
+                # Only queue if this isn't a duplicate of something recently queued
+                if not self._is_recently_queued_for_batch(alert_key):
+                    self._queue_for_batching(
+                        symbol,
+                        alert_type,
+                        alert_subtype or "",
+                        message,
+                        interval or "unknown",
+                    )
+                    # Mark that we just queued this alert
+                    self._mark_queued_for_batch(alert_key)
+                else:
+                    logger.debug(f"Skipping batch queue for {alert_key} - already queued recently")
 
             # Return opposite of is_in_cooldown (True = can trigger)
             return not is_in_cooldown
@@ -848,6 +859,63 @@ class AlertManager:
                 "CooldownService is required but not available. "
                 "Please ensure bot/services/cooldown_service.py exists and is properly set up."
             )
+
+    # Dictionary to track recently queued batch alerts
+    _batch_queue_track = {}
+    
+    def _is_recently_queued_for_batch(self, alert_key, max_age_seconds=300):
+        """Check if an alert was recently queued for batch processing
+        
+        Parameters:
+        -----------
+        alert_key : str
+            Unique key for the alert
+        max_age_seconds : int
+            Maximum age in seconds to consider "recent"
+            
+        Returns:
+        --------
+        bool
+            True if the alert was queued recently, False otherwise
+        """
+        now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
+        if alert_key in self._batch_queue_track:
+            queued_time = self._batch_queue_track[alert_key]
+            age = (now - queued_time).total_seconds()
+            return age <= max_age_seconds
+        return False
+    
+    def _mark_queued_for_batch(self, alert_key):
+        """Mark an alert as queued for batch processing
+        
+        Parameters:
+        -----------
+        alert_key : str
+            Unique key for the alert
+        """
+        self._batch_queue_track[alert_key] = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
+        
+        # Clean up old entries to prevent memory growth
+        self._cleanup_batch_queue_track()
+    
+    def _cleanup_batch_queue_track(self, max_age_seconds=600):
+        """Clean up old entries in the batch queue tracking dictionary
+        
+        Parameters:
+        -----------
+        max_age_seconds : int
+            Maximum age in seconds to keep entries
+        """
+        now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
+        keys_to_remove = []
+        
+        for key, timestamp in self._batch_queue_track.items():
+            age = (now - timestamp).total_seconds()
+            if age > max_age_seconds:
+                keys_to_remove.append(key)
+                
+        for key in keys_to_remove:
+            del self._batch_queue_track[key]
 
     def _queue_for_batching(
         self,
@@ -1051,7 +1119,7 @@ class AlertManager:
                 if not self._is_globally_cooled_down(
                     symbol, alert_type, alert_subtype, interval, message, market_data
                 ):
-                    logger.debug(
+                    logger.info(
                         f"Skipping {alert_type} ({alert_subtype}) for {symbol} due to global cooldown"
                     )
                     continue

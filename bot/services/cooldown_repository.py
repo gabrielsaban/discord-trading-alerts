@@ -98,7 +98,7 @@ class CooldownRepository:
                         f"Invalid timestamp format in cooldown data: {data['timestamp']}"
                     )
                     # Use current time as fallback
-                    data["timestamp"] = datetime.utcnow()
+                    data["timestamp"] = datetime.utcnow() + timedelta(hours=1)
 
             # Add or update the cooldown with a deep copy to prevent external modification
             self.cooldowns[key] = copy.deepcopy(data)
@@ -228,7 +228,7 @@ class CooldownRepository:
                                 f"Invalid timestamp format in loaded cooldown: {data['timestamp']}"
                             )
                             # Skip this entry or use current time as fallback
-                            data["timestamp"] = datetime.utcnow()
+                            data["timestamp"] = datetime.utcnow() + timedelta(hours=1)
 
                     self.cooldowns[key] = data
 
@@ -257,7 +257,7 @@ class CooldownRepository:
             Number of cooldowns removed
         """
         with self.lock:
-            now = datetime.utcnow()
+            now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
             cutoff_time = now - timedelta(hours=max_age_hours)
             keys_to_remove = []
 

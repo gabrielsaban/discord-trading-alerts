@@ -189,7 +189,7 @@ class CooldownService:
         True = can trigger (NOT in cooldown)
         False = cannot trigger (IS in cooldown)
         """
-        now = datetime.utcnow()
+        now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
 
         with self.lock:
             # Create a unique cooldown key that is independent of interval
@@ -230,6 +230,7 @@ class CooldownService:
                         logger.debug(
                             f"Higher timeframe {interval} for {cooldown_key} in cooldown: {minutes_remaining} minutes remaining."
                         )
+                        # The Override Engine will be used to determine if this can be overridden
                         return False
 
                 # For 4h/1d signals that pass the duplicate check, they can always trigger
@@ -271,7 +272,7 @@ class CooldownService:
             # Check if cooldown period has passed
             time_since_last = now - last_triggered
             if time_since_last < cooldown_period:
-                # Still in cooldown, but check for strength override
+                # Still in cooldown
                 minutes_remaining = int(
                     (cooldown_period - time_since_last).total_seconds() / 60
                 )
@@ -287,50 +288,7 @@ class CooldownService:
                     f"Progress: {cooldown_progress:.1%}"
                 )
 
-                # Enhanced override logic:
-                # 1. Extreme readings override active cooldowns on same timeframe (RSI < 20 or > 80, ADX > 40)
-                # 2. Medium signals can override shorter timeframe cooldowns if strength exceeds threshold
-
-                # Check for extreme readings (high strength signals)
-                if signal_strength >= 9.0:
-                    logger.debug(
-                        f"Extreme signal ({signal_strength:.1f}) overriding cooldown for {cooldown_key}."
-                    )
-                    return True
-
-                # Check if current signal is significantly stronger than previous
-                if (
-                    signal_strength > last_strength + 2.0  # Significantly stronger
-                    and cooldown_progress > 0.3  # At least 30% of cooldown has passed
-                    and signal_strength
-                    >= self.override_strength_threshold  # Strong enough to override
-                ):
-                    logger.debug(
-                        f"Strong signal ({signal_strength:.1f}) overriding cooldown for {cooldown_key}. "
-                        f"Previous strength: {last_strength:.1f}, Cooldown progress: {cooldown_progress:.1%}"
-                    )
-                    return True
-
-                # Check if a higher timeframe signal is trying to override lower timeframe cooldown
-                if interval and last_interval and interval != last_interval:
-                    # Get indices for comparison
-                    try:
-                        current_idx = self.TIMEFRAME_ORDER.index(interval)
-                        last_idx = self.TIMEFRAME_ORDER.index(last_interval)
-
-                        # If current timeframe is higher than the last one, allow override
-                        if current_idx > last_idx:
-                            logger.debug(
-                                f"Higher timeframe {interval} overriding {last_interval} cooldown for {cooldown_key}."
-                            )
-                            return True
-                    except ValueError:
-                        # If interval not found in order list, default to no override
-                        logger.warning(
-                            f"Timeframe not found in order list: {interval} or {last_interval}"
-                        )
-
-                # Still in cooldown with no override conditions met
+                # No override logic here - the OverrideEngine will handle this
                 return False
 
             # Cooldown period has passed
@@ -363,7 +321,7 @@ class CooldownService:
         signal_strength : float, optional
             Signal strength from 1.0 to 10.0
         """
-        now = datetime.utcnow()
+        now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
 
         with self.lock:
             # Create a unique cooldown key that is independent of interval
@@ -372,7 +330,7 @@ class CooldownService:
                 cooldown_key = f"{symbol}_{alert_subtype}"
             else:
                 cooldown_key = f"{symbol}_{alert_type}"
-
+                
             # Special handling for 4h/1d signals - they get a separate cooldown key
             is_higher_timeframe = interval in ["4h", "1d"]
             if is_higher_timeframe:
@@ -479,7 +437,7 @@ class CooldownService:
             True if current time is in a high volatility session, False otherwise
         """
         # Get current UTC hour
-        current_hour = datetime.utcnow().hour
+        current_hour = (datetime.utcnow() + timedelta(hours=1)).hour  # Add 1 hour to match batch_aggregator
 
         # Market opens are typically high volatility:
         # - US market open: 13:30-15:30 UTC
@@ -566,7 +524,7 @@ class CooldownService:
             Number of cooldowns removed
         """
         with self.lock:
-            now = datetime.utcnow()
+            now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
             cutoff_time = now - timedelta(hours=max_age_hours)
             keys_to_remove = []
 
