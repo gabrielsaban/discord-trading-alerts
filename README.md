@@ -59,11 +59,6 @@ Strong signals can override cooldowns when they're significantly more important:
    - Extreme readings override active cooldowns on same timeframe (RSI < 20 or > 80, ADX > 40)
    - Medium signals can override shorter timeframe cooldowns if strength metric exceeds threshold
 
-4. **Alert Grouping & Batching**
-   - Group similar alerts during cooldown periods
-   - Send summary with top 2 strongest signals when multiple alerts trigger
-   - Include timestamps, strength metrics and price data in grouped summaries
-
 ---
 
 ## ⚙️ Commands
@@ -84,7 +79,10 @@ Strong signals can override cooldowns when they're significantly more important:
 - [X] Global cooldown system to prevent duplicate alerts across timeframes
 - [X] Smart cooldown system with timeframe-based cooldowns and signal strength prioritization
 
-- [ ] Fix batch summary formatting and timestamps, add reaction to display rest of signals
+- [ ] Remove any batch summary reference
+- [ ] Timeframe-specific alert types - limit short timeframes (1m, 5m) to only useful indicators like RSI and volume
+- [ ] Interval-specific cooldowns - separate cooldown tracking per interval so alerts on different timeframes don't block each other
+- [ ] Enhanced alert targeting - mention all users watching a particular symbol/interval instead of duplicating messages
 - [ ] `/monitor` command to display permanent embeds with live crypto pair prices and current indicator statuses
 - [ ] Config centralization - move all thresholds, periods, jitter %, etc. into a central YAML/JSON config for runtime tweaks
 - [ ] Optional price change alerts
