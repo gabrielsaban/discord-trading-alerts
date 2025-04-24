@@ -295,29 +295,15 @@ class TradingAlertsBot(discord.Client):
 
                         # Add user mention and handle the pipe separator
                         user_mention = f"<@{user_id}>"
-                        if "\nPrice: " in clean_alert:
-                            parts = clean_alert.split("\nPrice: ")
-                            alert_header = parts[0]
-                            price_and_details = parts[1]
-
-                            # Check if there are detailed threshold values after the price
-                            if "\n" in price_and_details:
-                                price_part, details_part = price_and_details.split(
-                                    "\n", 1
-                                )
-                                reformatted_alert = f"{user_mention}\n{alert_header}\nPrice: {price_part}\n{details_part}"
-                                logger.debug(
-                                    f"Alert with detailed threshold info: {details_part}"
-                                )
-                            else:
-                                reformatted_alert = f"{user_mention}\n{alert_header}\nPrice: {price_and_details}"
-                        else:
-                            reformatted_alert = f"{user_mention}\n{clean_alert}"
-
-                        # Customize title based on whether this is a batch summary or regular alert
+                        
+                        # Detect if this is a batch summary
                         is_batch_summary = "ALERT SUMMARY" in clean_alert
-
+                        
                         if is_batch_summary:
+                            # For batch summaries, we need special handling
+                            # Format the reformatted alert with user mention
+                            reformatted_alert = f"{user_mention}\n{clean_alert}"
+                            
                             # Count how many alerts are in the summary
                             alert_count = 0
                             # Look for lines like "1.", "2.", etc.
@@ -338,8 +324,29 @@ class TradingAlertsBot(discord.Client):
 
                             total_alerts = alert_count + more_signals
                             title = f"🔔 Batch Summary: {symbol} ({total_alerts} alerts)"
+                        elif "\nPrice: " in clean_alert:
+                            # Regular alert with price
+                            parts = clean_alert.split("\nPrice: ")
+                            alert_header = parts[0]
+                            price_and_details = parts[1]
+
+                            # Check if there are detailed threshold values after the price
+                            if "\n" in price_and_details:
+                                price_part, details_part = price_and_details.split(
+                                    "\n", 1
+                                )
+                                reformatted_alert = f"{user_mention}\n{alert_header}\nPrice: {price_part}\n{details_part}"
+                                logger.debug(
+                                    f"Alert with detailed threshold info: {details_part}"
+                                )
+                            else:
+                                reformatted_alert = f"{user_mention}\n{alert_header}\nPrice: {price_and_details}"
                         else:
-                            # Regular alert
+                            # Regular alert without price
+                            reformatted_alert = f"{user_mention}\n{clean_alert}"
+
+                        # Set title for regular alerts
+                        if not is_batch_summary:
                             title = f"⚠️ Alert: {symbol} ({interval})"
 
                         # Create embed with custom title
@@ -591,7 +598,7 @@ class TradingAlertsBot(discord.Client):
         while not self.is_closed():
             try:
                 # Get current time for age calculations
-                now = datetime.utcnow()
+                now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
 
                 # Track total messages cleaned up
                 total_cleaned = 0
@@ -1738,16 +1745,12 @@ async def cleanup_command(interaction: discord.Interaction, count: int = 50):
             if message.created_at > command_time:
                 continue
 
-            # Check if this is our alert message
-            is_alert = (
-                message.author.id == bot.user.id
-                and message.embeds
-                and len(message.embeds) > 0
-                and message.embeds[0].title
-                and "Alert:" in message.embeds[0].title
-            )
+            # Check if this is our alert message or batch summary
+            is_bot_message = message.author.id == bot.user.id and message.embeds and len(message.embeds) > 0 and message.embeds[0].title
+            is_alert = is_bot_message and "Alert:" in message.embeds[0].title
+            is_summary = is_bot_message and "Batch Summary:" in message.embeds[0].title
 
-            if is_alert:
+            if is_alert or is_summary:
                 try:
                     await message.delete()
                     deleted_count += 1
@@ -1763,7 +1766,7 @@ async def cleanup_command(interaction: discord.Interaction, count: int = 50):
 
         # Send confirmation
         await interaction.followup.send(
-            f"✅ Cleanup complete! Checked {messages_checked} messages and deleted {deleted_count} alert messages.",
+            f"✅ Cleanup complete! Checked {messages_checked} messages and deleted {deleted_count} alert and summary messages.",
             ephemeral=True,
         )
     except Exception as e:
