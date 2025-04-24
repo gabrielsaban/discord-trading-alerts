@@ -113,7 +113,7 @@ class BatchAggregator:
                 self.queued_alerts[user_id][symbol][alert_key] = []
 
             # Add the alert to the queue
-            timestamp = datetime.utcnow()
+            timestamp = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to adjust for time difference
             self.queued_alerts[user_id][symbol][alert_key].append(
                 {
                     "message": alert_msg,
@@ -211,7 +211,7 @@ class BatchAggregator:
     def _process_all_batches(self) -> None:
         """Process batched alerts for all users"""
         with self.lock:
-            now = datetime.utcnow()
+            now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to adjust for time difference
 
             # Add debug log to show processing started
             logger.info(
@@ -284,7 +284,7 @@ class BatchAggregator:
         alerts_to_send = []
 
         # Process each symbol for this user
-        for symbol, alert_types in self.queued_alerts[user_id].items():
+        for symbol, alert_types in list(self.queued_alerts[user_id].items()):
             # Skip if no alerts for this symbol
             if not alert_types:
                 continue
@@ -314,6 +314,12 @@ class BatchAggregator:
                 logger.error(traceback.format_exc())
         else:
             logger.debug(f"No alerts to send for user {user_id} after processing")
+
+        # Clear all processed alerts for this user
+        if user_id in self.queued_alerts:
+            for symbol in list(self.queued_alerts[user_id].keys()):
+                if symbol in self.queued_alerts[user_id]:
+                    self.queued_alerts[user_id][symbol] = {}
 
     def _process_symbol_batches(self, symbol: str, alert_types: Dict) -> List[str]:
         """
@@ -412,6 +418,33 @@ class BatchAggregator:
                 key = f"{alert_core}|{alert['interval']}"
 
                 if key not in grouped_by_message:
+                    # Extract alert title and clean it
+                    clean_title = ""
+                    emoji = header.split(" ")[0] if " " in header else "🔔"
+                    
+                    # Get just the alert type (like "BOLLINGER SQUEEZE" or "EMA BULLISH CROSS")
+                    if "**" in header:
+                        alert_type = header.split("**")[1].strip()
+                        
+                        # Get the descriptive part after the alert type (like "EMA9 crossed above EMA21")
+                        description = ""
+                        if ":" in header:
+                            description_part = header.split(":", 1)[1].strip()
+                            # Remove the symbol name from the description
+                            if symbol in description_part:
+                                description_part = description_part.replace(symbol, "").strip()
+                                # Clean up any double spaces or trailing/leading spaces
+                                while "  " in description_part:
+                                    description_part = description_part.replace("  ", " ")
+                            description = description_part
+                        
+                        # Combine alert type with description
+                        clean_title = f"{alert_type}: {description}"
+                    else:
+                        clean_title = alert_core
+                        if symbol in clean_title:
+                            clean_title = clean_title.replace(symbol, "").strip()
+                    
                     grouped_by_message[key] = {
                         "alerts": [],
                         "intervals": set(),
@@ -419,7 +452,8 @@ class BatchAggregator:
                         "earliest_time": alert["timestamp"],
                         "prices": set(),
                         "additional_data": {},
-                        "emoji": header.split(" ")[0] if " " in header else "🔔",
+                        "emoji": emoji,
+                        "alert_title": clean_title,  # Store the clean alert title
                     }
 
                 # Add this alert to the group
@@ -469,22 +503,13 @@ class BatchAggregator:
 
             # Show top grouped alerts with improved formatting
             for i, group in enumerate(sorted_groups[:5], 1):
-                # Use representative alert for core info
-                alert = group["alerts"][0]
-
-                # Extract alert header without emoji prefix
-                message_lines = alert["message"].split("\n")
-                header = message_lines[0]
-
-                if ":" in header:
-                    alert_title = header.split(":", 1)[1].strip()
-                else:
-                    alert_title = header
-
+                # Get the stored alert title - already cleaned of symbol references
+                alert_title = group["alert_title"]
+                
                 # Format intervals
                 intervals = "/".join(sorted(group["intervals"]))
 
-                # Format time
+                # Format time with the +1 hour adjustment already applied during enqueue
                 time_str = group["earliest_time"].strftime("%H:%M:%S")
 
                 # Get max strength
@@ -492,13 +517,13 @@ class BatchAggregator:
 
                 # Count prefix for multiple alerts
                 count_prefix = (
-                    f"({len(group['alerts'])}x) " if len(group["alerts"]) > 1 else ""
+                    f"({len(group['alerts'])}x) " if len(group['alerts']) > 1 else ""
                 )
 
                 # Add emoji from original alert
                 emoji = group["emoji"]
 
-                # Format the main summary line
+                # Format the main summary line - just use the clean alert title, no duplication
                 summary += f"{i}. {count_prefix}{intervals} @ {time_str} (strength: {strength:.1f}): {emoji} {alert_title}\n"
 
                 # Add price information (joined if multiple values)
@@ -520,6 +545,7 @@ class BatchAggregator:
                             # Show range or list of values
                             summary += f"   {data_key}: {', '.join(data_list)}\n"
 
+                # Add an extra newline after each alert group for better readability
                 summary += "\n"
 
             # Show count of remaining alerts
@@ -531,10 +557,7 @@ class BatchAggregator:
 
             result.append(summary)
 
-        # Clear the processed alerts
-        for alert_key in list(alert_types.keys()):
-            alert_types[alert_key] = []
-
+        # No need to clear alerts here - they'll be cleared at the user level after processing all symbols
         return result
 
     def clear_all(self) -> None:
