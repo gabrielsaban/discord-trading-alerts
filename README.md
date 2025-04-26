@@ -74,15 +74,12 @@ Strong signals can override cooldowns when they're significantly more important:
 
 ## 📅 Roadmap
 
-- [X] User-defined indicator thresholds
-- [X] Decoupled checking frequency - check all timeframes more frequently regardless of their interval
-- [X] Global cooldown system to prevent duplicate alerts across timeframes
-- [X] Smart cooldown system with timeframe-based cooldowns and signal strength prioritization
-
 - [ ] Remove any batch summary reference
 - [ ] Timeframe-specific alert types - limit short timeframes (1m, 5m) to only useful indicators like RSI and volume
 - [ ] Interval-specific cooldowns - separate cooldown tracking per interval so alerts on different timeframes don't block each other
 - [ ] Enhanced alert targeting - mention all users watching a particular symbol/interval instead of duplicating messages
+- [ ] Make all command responses ephemeral 
+
 - [ ] `/monitor` command to display permanent embeds with live crypto pair prices and current indicator statuses
 - [ ] Config centralization - move all thresholds, periods, jitter %, etc. into a central YAML/JSON config for runtime tweaks
 - [ ] Optional price change alerts
