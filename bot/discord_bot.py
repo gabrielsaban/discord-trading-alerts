@@ -1504,10 +1504,9 @@ async def stats_command(interaction: discord.Interaction, days: int = 7):
 @bot.tree.command(name="help", description="Show help information about the bot")
 async def help_command(interaction: discord.Interaction):
     """Show help information"""
+    await interaction.response.defer(ephemeral=True)
     await bot.send_welcome_message(interaction.channel)
-    await interaction.response.send_message(
-        "Help information sent to the channel!", ephemeral=True
-    )
+    await interaction.followup.send("Help information sent to the channel!", ephemeral=True)
 
 
 # Guide command for optimal timeframes
@@ -1518,7 +1517,7 @@ async def help_command(interaction: discord.Interaction):
 @app_commands.checks.cooldown(1, 30)  # Limit usage to once every 30 seconds
 async def guide_command(interaction: discord.Interaction):
     """Show a guide for optimal indicator timeframes"""
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
 
     # First embed with first set of indicators
     embed = discord.Embed(
@@ -1605,7 +1604,7 @@ async def guide_command(interaction: discord.Interaction):
     )
 
     # Send both embeds
-    await interaction.followup.send(embeds=[embed, embed2])
+    await interaction.followup.send(embeds=[embed, embed2], ephemeral=True)
 
 
 # Add a sync command that only the bot owner can use
@@ -1774,143 +1773,6 @@ async def cleanup_command(interaction: discord.Interaction, count: int = 50):
         await interaction.followup.send(
             f"❌ Error during cleanup: {str(e)}", ephemeral=True
         )
-
-
-@bot.tree.command(
-    name="feature_flags", description="Manage feature flags (bot owner only)"
-)
-@app_commands.describe(
-    action="Action to perform on feature flags",
-    flag="Feature flag to modify",
-    value="New value for the flag",
-)
-@app_commands.choices(
-    action=[
-        app_commands.Choice(name="list", value="list"),
-        app_commands.Choice(name="set", value="set"),
-        app_commands.Choice(name="reload", value="reload"),
-    ],
-    flag=[
-        app_commands.Choice(
-            name="ENABLE_COOLDOWN_SERVICE", value="ENABLE_COOLDOWN_SERVICE"
-        ),
-        app_commands.Choice(
-            name="ENABLE_OVERRIDE_ENGINE", value="ENABLE_OVERRIDE_ENGINE"
-        ),
-        app_commands.Choice(
-            name="ENABLE_BATCH_AGGREGATOR", value="ENABLE_BATCH_AGGREGATOR"
-        ),
-    ],
-)
-async def feature_flags_command(
-    interaction: discord.Interaction,
-    action: str,
-    flag: Optional[str] = None,
-    value: Optional[str] = None,
-):
-    """Manage feature flags (bot owner only)"""
-    if not FEATURE_FLAGS_AVAILABLE:
-        await interaction.response.send_message(
-            "Feature flags module is not available.", ephemeral=True
-        )
-        return
-
-    # Check if user is the bot owner
-    bot_owner = os.getenv("BOT_OWNER_ID")
-    if not bot_owner or interaction.user.id != int(bot_owner):
-        await interaction.response.send_message(
-            "This command is limited to the bot owner only.", ephemeral=True
-        )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    if action == "list":
-        # Get all feature flags
-        db = get_db()
-        flags = db.get_all_system_settings("feature_flags")
-
-        # Build an embed
-        embed = discord.Embed(
-            title="Feature Flags",
-            description="Current feature flag settings",
-            color=discord.Color.blue(),
-        )
-
-        # Add default flags
-        embed.add_field(
-            name="From Environment Variables",
-            value="\n".join(
-                [
-                    f"**{flag}**: `{get_flag(flag)}`"
-                    for flag in [
-                        "ENABLE_COOLDOWN_SERVICE",
-                        "ENABLE_OVERRIDE_ENGINE",
-                        "ENABLE_BATCH_AGGREGATOR",
-                    ]
-                ]
-            ),
-            inline=False,
-        )
-
-        # Add database flags
-        if flags:
-            embed.add_field(
-                name="From Database",
-                value="\n".join([f"**{f['key']}**: `{f['value']}`" for f in flags]),
-                inline=False,
-            )
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    elif action == "set":
-        if not flag:
-            await interaction.followup.send(
-                "Please specify a flag to set.", ephemeral=True
-            )
-            return
-
-        if value is None:
-            await interaction.followup.send(
-                "Please specify a value for the flag.", ephemeral=True
-            )
-            return
-
-        # Convert value to appropriate type
-        converted_value = value
-        if value.lower() in ("true", "yes"):
-            converted_value = True
-        elif value.lower() in ("false", "no"):
-            converted_value = False
-        elif value.isdigit():
-            converted_value = int(value)
-
-        # Set the flag
-        set_flag(flag, converted_value)
-
-        # Also store in database
-        db = get_db()
-        db.set_system_setting(
-            "feature_flags",
-            flag,
-            str(converted_value),
-            f"Feature flag set by {interaction.user} on {datetime.now()}",
-        )
-
-        await interaction.followup.send(
-            f"Feature flag {flag} set to {converted_value}", ephemeral=True
-        )
-
-    elif action == "reload":
-        # Reload flags
-        flags = reload_flags()
-
-        await interaction.followup.send(
-            f"Feature flags reloaded. Current settings: {flags}", ephemeral=True
-        )
-
-    else:
-        await interaction.followup.send(f"Unknown action: {action}", ephemeral=True)
 
 
 # Run the bot
