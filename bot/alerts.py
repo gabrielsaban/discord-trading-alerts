@@ -1089,23 +1089,31 @@ class AlertManager:
         market_data : pd.DataFrame, optional
             Additional market data with ATR information
         """
+        import time
+        check_start = time.time()
+        
         if symbol not in self.alerts:
             logger.debug(f"No alerts registered for {symbol}")
             return []
 
         alert_count = len(self.alerts[symbol])
         # Log only once to avoid excessive logging
-        logger.debug(f"Checking {alert_count} alerts for {symbol}")
+        logger.debug(f"Checking {alert_count} alerts for {symbol} (interval: {interval})")
 
         triggered = []
-        for alert in self.alerts[symbol]:
+        for idx, alert in enumerate(self.alerts[symbol]):
             # Get alert type name for global cooldown tracking
             alert_type = type(alert).__name__
-            logger.debug(f"Checking alert type {alert_type} for {symbol}")
+            alert_start = time.time()
+            logger.debug(f"[{idx+1}/{alert_count}] Checking alert type {alert_type} for {symbol}")
 
             # Check the alert
             message = alert.check(df)
+            check_time = time.time() - alert_start
+            
             if message:
+                logger.debug(f"Alert {alert_type} for {symbol} triggered, message: {message[:50]}... (took {check_time:.2f}s)")
+                
                 # Extract alert subtype from message
                 alert_subtype = None
                 if "**" in message:
@@ -1116,21 +1124,33 @@ class AlertManager:
                         ].strip()  # Get text between first set of **
 
                 # First check global cooldown (across timeframes)
-                if not self._is_globally_cooled_down(
+                cooldown_start = time.time()
+                cooldown_check = self._is_globally_cooled_down(
                     symbol, alert_type, alert_subtype, interval, message, market_data
-                ):
+                )
+                cooldown_time = time.time() - cooldown_start
+                
+                if not cooldown_check:
                     logger.info(
-                        f"Skipping {alert_type} ({alert_subtype}) for {symbol} due to global cooldown"
+                        f"Skipping {alert_type} ({alert_subtype}) for {symbol} due to global cooldown (check took {cooldown_time:.2f}s)"
                     )
                     continue
-
-                logger.info(f"Alert triggered: {message}")
+                
+                logger.info(f"Alert passed cooldown check in {cooldown_time:.2f}s and will be triggered: {message[:50]}...")
                 # Update global cooldown for this alert type and subtype
+                update_start = time.time()
                 self._update_global_cooldown(
                     symbol, alert_type, alert_subtype, interval, message
                 )
+                update_time = time.time() - update_start
+                logger.debug(f"Updated cooldown for {alert_type} ({alert_subtype}) in {update_time:.2f}s")
+                
                 triggered.append(message)
+            else:
+                logger.debug(f"Alert {alert_type} for {symbol} did not trigger (took {check_time:.2f}s)")
 
+        total_time = time.time() - check_start
+        logger.info(f"Completed checking {alert_count} alerts for {symbol} in {total_time:.2f}s, triggered: {len(triggered)}")
         return triggered
 
     def get_symbols(self) -> List[str]:

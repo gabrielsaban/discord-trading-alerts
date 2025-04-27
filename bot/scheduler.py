@@ -404,21 +404,60 @@ class AlertScheduler:
 
         This is called periodically by the scheduler for each frequency tier
         """
-        logger.debug(f"Running {frequency_tier} frequency tier check")
+        import time
+        import sys
+        import traceback
+        
+        try:
+            # Use direct print statements to absolutely ensure output
+            print(f"\n\n!!!!! EXECUTING CHECK: {frequency_tier} frequency tier at {datetime.now()} !!!!!\n\n")
+            sys.stdout.flush()  # Force flush to ensure it's written immediately
+            
+            # Also log at various levels
+            logger.critical(f"CRITICAL: Starting {frequency_tier} frequency tier check")
+            logger.error(f"ERROR: Starting {frequency_tier} frequency tier check")  # Log at ERROR too for visibility
+            
+            start_time = time.time()
+            logger.info(f"Starting {frequency_tier} frequency tier check")
 
-        # Make a copy to avoid modification during iteration
-        with self.lock:
-            symbols_to_check = list(self.symbols_by_frequency[frequency_tier])
+            # Make a copy to avoid modification during iteration
+            with self.lock:
+                symbols_to_check = list(self.symbols_by_frequency[frequency_tier])
+                
+            logger.info(f"Checking {len(symbols_to_check)} symbols in {frequency_tier} tier: {symbols_to_check}")
+            
+            # Print directly to stdout for absolute certainty
+            print(f"Symbols to check in {frequency_tier} tier: {symbols_to_check}")
+            sys.stdout.flush()
 
-        # Check each symbol/interval in this frequency tier
-        for symbol, interval in symbols_to_check:
-            try:
-                self.check_symbol_alerts(symbol, interval)
-            except Exception as e:
-                logger.error(f"Error checking {symbol} ({interval}): {e}")
-                import traceback
-
-                logger.error(traceback.format_exc())
+            # Check each symbol/interval in this frequency tier
+            for idx, (symbol, interval) in enumerate(symbols_to_check):
+                try:
+                    symbol_start = time.time()
+                    logger.info(f"[{idx+1}/{len(symbols_to_check)}] Checking alerts for {symbol} ({interval})")
+                    print(f"Checking symbol {idx+1}/{len(symbols_to_check)}: {symbol} ({interval})")
+                    sys.stdout.flush()
+                    
+                    self.check_symbol_alerts(symbol, interval)
+                    symbol_duration = time.time() - symbol_start
+                    logger.info(f"Finished check for {symbol} ({interval}) in {symbol_duration:.2f} seconds")
+                except Exception as e:
+                    logger.error(f"Error checking {symbol} ({interval}): {e}")
+                    print(f"ERROR checking {symbol} ({interval}): {e}")
+                    sys.stdout.flush()
+                    logger.error(traceback.format_exc())
+            
+            total_duration = time.time() - start_time
+            logger.info(f"Completed {frequency_tier} frequency tier check in {total_duration:.2f} seconds")
+            print(f"Completed {frequency_tier} frequency tier check in {total_duration:.2f} seconds")
+            sys.stdout.flush()
+        except Exception as e:
+            # Catch any exception that might occur in the check_frequency_tier method
+            error_msg = f"CRITICAL ERROR in frequency tier check for {frequency_tier}: {e}"
+            logger.critical(error_msg)
+            print(f"\n\n!!!!! {error_msg} !!!!!\n\n")
+            print(traceback.format_exc())
+            sys.stdout.flush()
 
     def check_symbol_alerts(self, symbol: str, interval: str):
         """
@@ -426,6 +465,10 @@ class AlertScheduler:
 
         This is called for each symbol/interval pair by the frequency tier checker
         """
+        import time
+        check_start_time = time.time()
+        logger.info(f"Starting alert check for {symbol} ({interval})")
+        
         # We need a fresh database connection for each thread
         db = get_db()  # This will get a new connection for this thread
         # Get the cooldown service for ATR reference intervals
@@ -446,6 +489,7 @@ class AlertScheduler:
 
             try:
                 # Fetch market data, using cache when possible
+                fetch_start = time.time()
                 limit = DEFAULT_CANDLE_LIMITS.get(interval, 200)
 
                 # Determine if we should force refresh based on the interval
@@ -471,12 +515,15 @@ class AlertScheduler:
                             f"Forcing refresh for {symbol} ({interval}) as current candle is nearly complete"
                         )
 
+                logger.debug(f"Fetching market data for {symbol} ({interval}), force_refresh={force_refresh}")
                 df = fetch_market_data(
                     symbol=symbol,
                     interval=interval,
                     limit=limit,
                     force_refresh=force_refresh,
                 )
+                fetch_time = time.time() - fetch_start
+                logger.info(f"Fetched market data for {symbol} ({interval}) in {fetch_time:.2f} seconds, got {len(df) if df is not None else 0} candles")
 
                 if df is None or df.empty:
                     logger.warning(f"Failed to fetch data for {symbol} ({interval})")
@@ -486,10 +533,12 @@ class AlertScheduler:
                 market_data = None  # Default to None
 
                 # Check if this interval has a reference interval for ATR-based cooldowns
+                atr_start = time.time()
                 ref_interval = cooldown_service.atr_reference_intervals.get(interval)
                 if ref_interval:
                     try:
                         # Fetch data for the reference interval
+                        logger.debug(f"Fetching reference interval data for {symbol} ({ref_interval})")
                         ref_df = fetch_market_data(
                             symbol=symbol,
                             interval=ref_interval,
@@ -499,6 +548,7 @@ class AlertScheduler:
                         
                         if ref_df is not None and not ref_df.empty:
                             # Calculate ATR directly
+                            logger.debug(f"Calculating ATR for {symbol} ({ref_interval})")
                             atr_data = calculate_atr(ref_df, length=14, calculate_percentiles=True)
                             
                             if atr_data is not None:
@@ -508,33 +558,47 @@ class AlertScheduler:
                                     "ATR_Percent": atr_data["ATR_Percent"].iloc[-1],
                                     "ATR_Percentile": atr_data["ATR_Percentile"].iloc[-1],
                                 }
+                                logger.debug(f"ATR data for {symbol}: {market_data}")
                     except Exception as e:
                         logger.error(f"Error calculating ATR for {symbol} ({ref_interval}): {e}")
+                atr_time = time.time() - atr_start
+                logger.debug(f"ATR calculation for {symbol} took {atr_time:.2f} seconds")
 
                 # Get users watching this symbol
+                users_start = time.time()
                 users = db.get_users_watching_symbol(symbol, interval)
                 if not users:
                     logger.debug(f"No users watching {symbol} ({interval})")
                     return
+                users_time = time.time() - users_start
+                logger.debug(f"Found {len(users)} users watching {symbol} ({interval}) in {users_time:.2f} seconds")
 
                 # Process alerts for each user independently
-                for user_id in users:
+                for user_idx, user_id in enumerate(users):
+                    user_start = time.time()
+                    logger.debug(f"Processing user {user_idx+1}/{len(users)}: {user_id}")
+                    
                     # Get user settings
                     user = db.get_user(user_id)
                     if not user or not user.get("is_active", False):
                         continue
 
                     # Get the alert manager for this user/symbol/interval
+                    setup_start = time.time()
                     manager = self.get_user_alert_manager(user_id, symbol, interval)
 
                     # Set up alerts based on user preferences
                     self.setup_user_alerts(
                         manager, user_id, symbol, interval, user["settings"]
                     )
+                    setup_time = time.time() - setup_start
+                    logger.debug(f"Set up alerts for {user_id} in {setup_time:.2f} seconds")
 
                     # Check for triggered alerts with ATR data for cooldown adjustment
+                    checking_start = time.time()
                     # Handle both old and new function signatures
                     try:
+                        logger.debug(f"Checking alerts for {user_id} on {symbol} ({interval})")
                         alerts = manager.check_alerts(symbol, df, interval, market_data)
                     except TypeError:
                         # Fall back to old function signature (for tests)
@@ -542,6 +606,8 @@ class AlertScheduler:
                             f"Falling back to legacy check_alerts signature for {symbol}"
                         )
                         alerts = manager.check_alerts(symbol, df)
+                    checking_time = time.time() - checking_start
+                    logger.debug(f"Alert check for {user_id} on {symbol} ({interval}) took {checking_time:.2f} seconds")
 
                     if alerts:
                         logger.info(
@@ -614,11 +680,17 @@ class AlertScheduler:
                                 # Send batched alerts
                                 if modified_batched:
                                     self._run_callback(user_id, modified_batched)
+                    
+                    user_time = time.time() - user_start
+                    logger.debug(f"Processed user {user_id} in {user_time:.2f} seconds")
             except Exception as e:
                 logger.error(f"Error checking alerts for {symbol} ({interval}): {e}")
                 import traceback
 
                 logger.error(traceback.format_exc())
+        
+        total_check_time = time.time() - check_start_time
+        logger.info(f"Completed alert check for {symbol} ({interval}) in {total_check_time:.2f} seconds")
 
     def setup_user_alerts(
         self,

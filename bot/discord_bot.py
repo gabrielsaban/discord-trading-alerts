@@ -27,6 +27,13 @@ except ImportError:
 # Set up logging
 # logging.basicConfig is now handled in main.py
 logger = logging.getLogger("trading_alerts.discord_bot")
+logger.setLevel(logging.DEBUG)  # Ensure we're capturing all logs
+
+# Also ensure that our parent logger captures all logs
+root_logger = logging.getLogger("trading_alerts")
+root_logger.setLevel(logging.DEBUG)
+discord_root_logger = logging.getLogger("discord_trading_alerts")
+discord_root_logger.setLevel(logging.DEBUG)
 
 # Load environment variables
 load_dotenv()
