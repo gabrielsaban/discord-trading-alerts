@@ -59,6 +59,18 @@ Strong signals can override cooldowns when they're significantly more important:
    - Extreme readings override active cooldowns on same timeframe (RSI < 20 or > 80, ADX > 40)
    - Medium signals can override shorter timeframe cooldowns if strength metric exceeds threshold
 
+4. **Timeframe-Specific Alert Filtering**
+   - Short Timeframes (1m, 3m, 5m): Limited to RSI and Volume alerts only - these indicators are most reliable at short intervals
+   - Medium Timeframes (15m, 30m, 1h): Includes RSI, Volume, MACD, EMA, Bollinger Bands, and ADX alerts
+   - Long Timeframes (4h, 1d, etc.): All indicators including Pattern Recognition, which is most reliable on higher timeframes
+   - Controlled via feature flag: `ENABLE_TIMEFRAME_FILTERING`
+
+5. **Interval-Specific Cooldowns**
+   - Each timeframe maintains its own separate cooldown tracking
+   - An alert on the 5m timeframe won't block the same alert type on the 1h timeframe
+   - Allows for monitoring the same coin across multiple timeframes without missing signals
+   - Particularly useful for scalping vs. swing trading on the same pair
+
 ---
 
 ## ⚙️ Commands
@@ -74,17 +86,17 @@ Strong signals can override cooldowns when they're significantly more important:
 
 ## 📅 Roadmap
 
+- [x] Make all command responses ephemeral
+- [x] Timeframe-specific alert types - limit short timeframes (1m, 5m) to only useful indicators like RSI and volume
+- [x] Interval-specific cooldowns - separate cooldown tracking per interval so alerts on different timeframes don't block each other
+- [X] Enhanced alert targeting - mention all users watching a particular symbol/interval instead of duplicating messages
 - [ ] Remove any batch summary reference
-- [ ] Timeframe-specific alert types - limit short timeframes (1m, 5m) to only useful indicators like RSI and volume
-- [ ] Interval-specific cooldowns - separate cooldown tracking per interval so alerts on different timeframes don't block each other
-- [ ] Enhanced alert targeting - mention all users watching a particular symbol/interval instead of duplicating messages
-- [ ] Make all command responses ephemeral 
-
 - [ ] `/monitor` command to display permanent embeds with live crypto pair prices and current indicator statuses
 - [ ] Config centralization - move all thresholds, periods, jitter %, etc. into a central YAML/JSON config for runtime tweaks
 - [ ] Optional price change alerts
-- [ ] Process separation - run the scheduler as a dedicated microservice to maintain alert timing during bot restarts
 
+- [ ] Backtesting framework - analyze historical data to dynamically optimize default indicator thresholds for maximum profitability and signal quality
+- [ ] Premium tier with custom threshold alerts - allow paid users to set personalized indicator thresholds delivered via DM
 - [ ] Web dashboard (Flask/FastAPI)
 - [ ] Telegram, email version/integrations
 - [ ] Stocks integration (`yfinance`)
