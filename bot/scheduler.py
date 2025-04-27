@@ -635,16 +635,57 @@ class AlertScheduler:
             RsiAlert,
             VolumeSpikeAlert,
         )
+        
+        # Check if we should use timeframe-specific filtering
+        try:
+            from bot.services.feature_flags import get_flag
+            use_timeframe_filtering = get_flag("ENABLE_TIMEFRAME_FILTERING", True)
+        except ImportError:
+            # If feature flags not available, default to enabled
+            use_timeframe_filtering = True
+            
+        logger.debug(f"Timeframe filtering {'enabled' if use_timeframe_filtering else 'disabled'} for {symbol} ({interval})")
 
         # Clear existing alerts for this user/symbol
         manager.clear_alerts(symbol)
 
-        # Get enabled alert types
+        # Get enabled alert types from user settings
         enabled_alerts = settings.get("enabled_alerts", [])
+        
+        # Get the alerts to set up (either filtered or all enabled)
+        if use_timeframe_filtering:
+            # Define interval-appropriate indicators
+            short_timeframe_indicators = ["rsi", "volume"]
+            medium_timeframe_indicators = ["rsi", "volume", "macd", "ema", "bb", "adx"]
+            long_timeframe_indicators = ["rsi", "macd", "ema", "bb", "volume", "adx", "pattern"]
+            
+            # Filter enabled alerts based on timeframe
+            if interval in ["1m", "3m", "5m"]:
+                appropriate_indicators = short_timeframe_indicators
+                logger.info(f"Using short timeframe indicators for {symbol} ({interval})")
+            elif interval in ["15m", "30m", "1h"]:
+                appropriate_indicators = medium_timeframe_indicators
+                logger.info(f"Using medium timeframe indicators for {symbol} ({interval})")
+            else:  # 4h, 1d, etc.
+                appropriate_indicators = long_timeframe_indicators
+                logger.info(f"Using long timeframe indicators for {symbol} ({interval})")
+            
+            # Only keep enabled alerts that are appropriate for this timeframe
+            filtered_alerts = [alert for alert in enabled_alerts if alert in appropriate_indicators]
+            
+            logger.info(f"Filtered alerts for {symbol} ({interval}): {filtered_alerts} (from user settings: {enabled_alerts})")
+            
+            alerts_to_setup = filtered_alerts
+        else:
+            # Use all enabled alerts without filtering
+            alerts_to_setup = enabled_alerts
+            logger.debug(f"Using all enabled alerts for {symbol} ({interval}): {enabled_alerts}")
+        
+        # Get cooldown from settings
         cooldown = settings.get("cooldown_minutes", 240)
 
-        # Add alerts based on user settings
-        if "rsi" in enabled_alerts:
+        # Set up the filtered alerts
+        if "rsi" in alerts_to_setup:
             manager.add_alert(
                 RsiAlert(
                     symbol,
@@ -654,10 +695,10 @@ class AlertScheduler:
                 )
             )
 
-        if "macd" in enabled_alerts:
+        if "macd" in alerts_to_setup:
             manager.add_alert(MacdAlert(symbol, cooldown_minutes=cooldown))
 
-        if "ema" in enabled_alerts:
+        if "ema" in alerts_to_setup:
             manager.add_alert(
                 EmaCrossAlert(
                     symbol,
@@ -667,7 +708,7 @@ class AlertScheduler:
                 )
             )
 
-        if "bb" in enabled_alerts:
+        if "bb" in alerts_to_setup:
             manager.add_alert(
                 BollingerBandAlert(
                     symbol,
@@ -676,7 +717,7 @@ class AlertScheduler:
                 )
             )
 
-        if "volume" in enabled_alerts:
+        if "volume" in alerts_to_setup:
             manager.add_alert(
                 VolumeSpikeAlert(
                     symbol,
@@ -685,7 +726,7 @@ class AlertScheduler:
                 )
             )
 
-        if "adx" in enabled_alerts:
+        if "adx" in alerts_to_setup:
             manager.add_alert(
                 AdxAlert(
                     symbol,
@@ -694,7 +735,7 @@ class AlertScheduler:
                 )
             )
 
-        if "pattern" in enabled_alerts:
+        if "pattern" in alerts_to_setup:
             manager.add_alert(PatternAlert(symbol, cooldown_minutes=cooldown))
 
     def _extract_alert_type(self, alert_message: str) -> str:

@@ -1144,7 +1144,11 @@ class AlertManager:
         return sum(len(alerts) for alerts in self.alerts.values())
 
     def setup_default_alerts(self, symbol: str):
-        """Set up default alerts for a symbol"""
+        """Set up default alerts for a symbol
+
+        DEPRECATED: Use setup_timeframe_specific_alerts instead for better filtering
+        """
+        logger.warning(f"Using deprecated setup_default_alerts for {symbol}. Consider using setup_timeframe_specific_alerts instead.")
         self.add_alert(RsiAlert(symbol))
         self.add_alert(MacdAlert(symbol))
         self.add_alert(EmaCrossAlert(symbol))
@@ -1152,6 +1156,67 @@ class AlertManager:
         self.add_alert(VolumeSpikeAlert(symbol))
         self.add_alert(AdxAlert(symbol))
         self.add_alert(PatternAlert(symbol))
+
+    def setup_timeframe_specific_alerts(self, symbol: str, interval: str = None):
+        """Set up alerts for a symbol based on timeframe appropriateness
+        
+        Parameters:
+        -----------
+        symbol : str
+            Trading pair symbol
+        interval : str, optional
+            Timeframe interval (e.g., '5m', '15m', '1h', '4h')
+            If not provided, uses the current interval of the AlertManager
+        """
+        # Use the current interval if none provided
+        if interval is None:
+            interval = self.current_interval
+            
+        # If still no interval, use default alerts as fallback
+        if interval is None:
+            logger.warning(f"No interval specified for {symbol}, using all alerts")
+            self.setup_default_alerts(symbol)
+            return
+            
+        logger.info(f"Setting up timeframe-specific alerts for {symbol} on {interval} interval")
+        
+        # Define interval-appropriate indicators
+        short_timeframe_indicators = ["rsi", "volume"]
+        medium_timeframe_indicators = ["rsi", "volume", "macd", "ema", "bb", "adx"]
+        long_timeframe_indicators = ["rsi", "macd", "ema", "bb", "volume", "adx", "pattern"]
+        
+        # Determine appropriate indicators based on timeframe
+        if interval in ["1m", "3m", "5m"]:
+            appropriate_indicators = short_timeframe_indicators
+            logger.info(f"Using short timeframe indicators for {symbol} ({interval}): {appropriate_indicators}")
+        elif interval in ["15m", "30m", "1h"]:
+            appropriate_indicators = medium_timeframe_indicators
+            logger.info(f"Using medium timeframe indicators for {symbol} ({interval}): {appropriate_indicators}")
+        else:  # 4h, 1d, etc.
+            appropriate_indicators = long_timeframe_indicators
+            logger.info(f"Using long timeframe indicators for {symbol} ({interval}): {appropriate_indicators}")
+        
+        # Set up the appropriate alerts for this timeframe
+        if "rsi" in appropriate_indicators:
+            self.add_alert(RsiAlert(symbol))
+            
+        if "macd" in appropriate_indicators:
+            self.add_alert(MacdAlert(symbol))
+            
+        if "ema" in appropriate_indicators:
+            self.add_alert(EmaCrossAlert(symbol))
+            
+        if "bb" in appropriate_indicators:
+            self.add_alert(BollingerBandAlert(symbol))
+            
+        if "volume" in appropriate_indicators:
+            self.add_alert(VolumeSpikeAlert(symbol))
+            
+        if "adx" in appropriate_indicators:
+            self.add_alert(AdxAlert(symbol))
+            
+        if "pattern" in appropriate_indicators:
+            self.add_alert(PatternAlert(symbol))
 
     def set_user_id(self, user_id: str):
         """Set the user ID for this AlertManager instance
