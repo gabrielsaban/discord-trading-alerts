@@ -123,7 +123,19 @@ class AlertScheduler:
         self.user_alert_managers: Dict[
             str, Dict[str, AlertManager]
         ] = {}  # user_id -> {symbol_interval -> AlertManager}
-        self.scheduler = BackgroundScheduler()
+        
+        # Configure scheduler with proper executors and job defaults
+        self.scheduler = BackgroundScheduler(
+            job_defaults={
+                'coalesce': False,  # Run all missed jobs
+                'max_instances': 3,  # Allow multiple instances to run concurrently if needed
+                'misfire_grace_time': 60  # Allow jobs up to 60 seconds late
+            },
+            executors={
+                'default': {'type': 'threadpool', 'max_workers': 10}  # Increase worker threads
+            }
+        )
+        
         self.alert_callback = alert_callback
         self.running = False
         self.last_run: Dict[
