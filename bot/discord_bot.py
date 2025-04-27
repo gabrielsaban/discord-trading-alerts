@@ -216,7 +216,7 @@ class TradingAlertsBot(discord.Client):
             value="`/watch symbol [interval]` - Add a trading pair to watchlist\n"
             "`/unwatch symbol [interval]` - Remove a pair from watchlist\n"
             "`/list` - Show your watchlist\n"
-            "`/settings` - Adjust alert thresholds\n"
+            "`/settings` - View your alert settings\n"
             "`/alerts` - Enable or disable specific alert types\n"
             "`/stats` - View alert statistics\n"
             "`/guide` - Get guidance on optimal timeframes\n"
@@ -227,7 +227,7 @@ class TradingAlertsBot(discord.Client):
 
         embed.add_field(
             name="Tip",
-            value="Click the ❓ reaction on alerts to get an explanation of what the alert means.\n",
+            value="Click the ❓ reaction on alerts to get an explanation of what the alert means.",
             inline=False,
         )
 
@@ -376,8 +376,7 @@ class TradingAlertsBot(discord.Client):
                                 f"Sent alert for {symbol} ({interval}) to channel {current_channel.id}"
                             )
 
-                            # Add reactions: checkmark to delete and question mark for explanation
-                            await message.add_reaction("✅")
+                            # Add only question mark reaction for explanation
                             await message.add_reaction("❓")
 
                             # Extract alert type for explanations
@@ -893,27 +892,8 @@ class TradingAlertsBot(discord.Client):
             if not is_alert:
                 return
 
-            # Handle checkmark reaction (delete alert)
-            if payload.emoji.name == "✅":
-                # Check if the user is mentioned in the alert
-                # Only allow the user who received the alert to delete it
-                if (
-                    message.embeds[0].description
-                    and f"<@{payload.user_id}>" in message.embeds[0].description
-                ):
-                    try:
-                        await message.delete()
-                        logger.info(
-                            f"Deleted alert message {message.id} by user request"
-                        )
-                        # Remove from tracked messages if it's there
-                        if message.id in self.alert_messages:
-                            del self.alert_messages[message.id]
-                    except Exception as e:
-                        logger.error(f"Error deleting message: {e}")
-
             # Handle question mark reaction (add explanation)
-            elif payload.emoji.name == "❓":
+            if payload.emoji.name == "❓":
                 # Check if we already added the explanation (to avoid adding it multiple times)
                 if any(
                     field.name == "Explanation" for field in message.embeds[0].fields
@@ -1171,29 +1151,15 @@ async def list_command(interaction: discord.Interaction):
 
 
 # Settings command
-@bot.tree.command(name="settings", description="Adjust your alert settings")
-@app_commands.describe(setting="Setting to change", value="New value for the setting")
-@app_commands.choices(
-    setting=[
-        app_commands.Choice(name="RSI Oversold Threshold", value="rsi_oversold"),
-        app_commands.Choice(name="RSI Overbought Threshold", value="rsi_overbought"),
-        app_commands.Choice(name="Volume Spike Threshold", value="volume_threshold"),
-        app_commands.Choice(name="EMA Short Period", value="ema_short"),
-        app_commands.Choice(name="EMA Long Period", value="ema_long"),
-        app_commands.Choice(
-            name="Bollinger Band Squeeze Threshold", value="bb_squeeze_threshold"
-        ),
-        app_commands.Choice(name="ADX Trend Strength Threshold", value="adx_threshold"),
-        app_commands.Choice(name="Alert Cooldown (minutes)", value="cooldown_minutes"),
-    ]
-)
+@bot.tree.command(name="settings", description="View your alert settings (custom thresholds coming soon)")
+@app_commands.describe(setting="Setting name", value="Setting value")
 @app_commands.checks.cooldown(1, 5)  # 1 use every 5 seconds per user
 async def settings_command(
     interaction: discord.Interaction,
     setting: Optional[str] = None,
     value: Optional[str] = None,
 ):
-    """View or adjust alert settings"""
+    """View alert settings"""
     await interaction.response.defer(ephemeral=True)
 
     user_id = str(interaction.user.id)
@@ -1204,151 +1170,40 @@ async def settings_command(
         bot.db.create_user(user_id, interaction.user.display_name, interaction.user.id)
         user = bot.db.get_user(user_id)
 
-    # If no setting provided, show current settings
-    if setting is None:
-        embed = discord.Embed(
-            title="⚙️ Your Alert Settings",
-            description="These settings apply to all your alerts. Use `/settings setting value` to change them.",
-            color=discord.Color.blue(),
-        )
+    # Show current settings
+    embed = discord.Embed(
+        title="⚙️ Your Alert Settings",
+        description="Custom alert thresholds will be available in a future premium tier. Currently, all alerts use default thresholds.",
+        color=discord.Color.blue(),
+    )
 
-        settings = user["settings"]
+    settings = user["settings"]
 
-        embed.add_field(
-            name="RSI Thresholds",
-            value=f"Oversold: {settings.get('rsi_oversold', 30)}\n"
-            f"Overbought: {settings.get('rsi_overbought', 70)}",
-            inline=True,
-        )
+    embed.add_field(
+        name="Current Default Thresholds",
+        value=f"• RSI: Oversold (<30), Overbought (>70)\n"
+        f"• EMA: Short (9), Long (21)\n"
+        f"• Volume Spike: 2.5x average\n"
+        f"• Bollinger Squeeze: 0.05\n"
+        f"• ADX: 25",
+        inline=False,
+    )
 
-        embed.add_field(
-            name="EMA Periods",
-            value=f"Short: {settings.get('ema_short', 9)}\n"
-            f"Long: {settings.get('ema_long', 21)}",
-            inline=True,
-        )
+    # Show enabled alert types
+    enabled = settings.get(
+        "enabled_alerts", ["rsi", "macd", "ema", "bb", "volume", "adx", "pattern"]
+    )
+    embed.add_field(
+        name="Enabled Alerts", value=", ".join(enabled) or "None", inline=False
+    )
+    
+    embed.add_field(
+        name="Alert Configuration",
+        value="Use the `/alerts` command to enable or disable specific alert types.",
+        inline=False,
+    )
 
-        embed.add_field(
-            name="Volume & Bollinger",
-            value=f"Volume Threshold: {settings.get('volume_threshold', 2.5)}\n"
-            f"BB Squeeze: {settings.get('bb_squeeze_threshold', 0.05)}",
-            inline=True,
-        )
-
-        embed.add_field(
-            name="Trend & Timing",
-            value=f"ADX Threshold: {settings.get('adx_threshold', 25)}\n"
-            f"Cooldown: {settings.get('cooldown_minutes', 240)} minutes",
-            inline=True,
-        )
-
-        # Show enabled alert types
-        enabled = settings.get(
-            "enabled_alerts", ["rsi", "macd", "ema", "bb", "volume", "adx", "pattern"]
-        )
-        embed.add_field(
-            name="Enabled Alerts", value=", ".join(enabled) or "None", inline=False
-        )
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        return
-
-    # If setting provided but no value, show current value
-    if value is None:
-        current_value = user["settings"].get(setting, "Not set")
-        await interaction.followup.send(
-            f"Current value for {setting}: {current_value}\n"
-            f"Use `/settings {setting} new_value` to change it.",
-            ephemeral=True,
-        )
-        return
-
-    # Update setting
-    try:
-        # Convert value to appropriate type
-        if setting in [
-            "rsi_oversold",
-            "rsi_overbought",
-            "ema_short",
-            "ema_long",
-            "adx_threshold",
-            "cooldown_minutes",
-        ]:
-            typed_value = int(value)
-        elif setting in ["volume_threshold", "bb_squeeze_threshold"]:
-            typed_value = float(value)
-        else:
-            typed_value = value
-
-        # Validate values
-        if setting == "rsi_oversold" and (typed_value < 1 or typed_value > 40):
-            await interaction.followup.send(
-                f"Invalid RSI oversold threshold: {typed_value}. Must be between 1 and 40.",
-                ephemeral=True,
-            )
-            return
-
-        if setting == "rsi_overbought" and (typed_value < 60 or typed_value > 99):
-            await interaction.followup.send(
-                f"Invalid RSI overbought threshold: {typed_value}. Must be between 60 and 99.",
-                ephemeral=True,
-            )
-            return
-
-        if setting in ["ema_short", "ema_long"] and (
-            typed_value < 2 or typed_value > 200
-        ):
-            await interaction.followup.send(
-                f"Invalid EMA period: {typed_value}. Must be between 2 and 200.",
-                ephemeral=True,
-            )
-            return
-
-        if setting == "volume_threshold" and (typed_value < 1.1 or typed_value > 10):
-            await interaction.followup.send(
-                f"Invalid volume threshold: {typed_value}. Must be between 1.1 and 10.",
-                ephemeral=True,
-            )
-            return
-
-        if setting == "bb_squeeze_threshold" and (
-            typed_value < 0.01 or typed_value > 0.5
-        ):
-            await interaction.followup.send(
-                f"Invalid Bollinger Band squeeze threshold: {typed_value}. Must be between 0.01 and 0.5.",
-                ephemeral=True,
-            )
-            return
-
-        if setting == "adx_threshold" and (typed_value < 10 or typed_value > 50):
-            await interaction.followup.send(
-                f"Invalid ADX threshold: {typed_value}. Must be between 10 and 50.",
-                ephemeral=True,
-            )
-            return
-
-        if setting == "cooldown_minutes" and (typed_value < 5 or typed_value > 1440):
-            await interaction.followup.send(
-                f"Invalid cooldown: {typed_value}. Must be between 5 and 1440 minutes (24 hours).",
-                ephemeral=True,
-            )
-            return
-
-        # Update setting
-        bot.db.update_user_settings(user_id, {setting: typed_value})
-
-        await interaction.followup.send(
-            f"✅ Updated {setting} to {typed_value}.", ephemeral=True
-        )
-    except ValueError:
-        await interaction.followup.send(
-            f"Invalid value: {value}. Please provide a valid number.", ephemeral=True
-        )
-    except Exception as e:
-        logger.error(f"Error updating setting {setting} for user {user_id}: {e}")
-        await interaction.followup.send(
-            f"Error updating setting: {str(e)}", ephemeral=True
-        )
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # Enable/disable alerts command
@@ -1536,7 +1391,7 @@ async def help_command(interaction: discord.Interaction):
         value="`/watch symbol [interval]` - Add a trading pair to watchlist\n"
         "`/unwatch symbol [interval]` - Remove a pair from watchlist\n"
         "`/list` - Show your watchlist\n"
-        "`/settings` - Adjust alert thresholds\n"
+        "`/settings` - View your alert settings\n"
         "`/alerts` - Enable or disable specific alert types\n"
         "`/stats` - View alert statistics\n"
         "`/guide` - Get guidance on optimal timeframes\n"
@@ -1547,7 +1402,7 @@ async def help_command(interaction: discord.Interaction):
 
     embed.add_field(
         name="Alert Reactions",
-        value="❓ - Get an explanation of what the alert means\n",
+        value="❓ - Get an explanation of what the alert means",
         inline=False,
     )
 
