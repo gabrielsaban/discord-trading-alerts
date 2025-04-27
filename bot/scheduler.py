@@ -55,12 +55,12 @@ INTERVAL_FREQUENCY_MAP = {
     "3m": "high",
     "5m": "high",
     # Medium frequency
-    "15m": "medium",  # Moved from high to medium frequency
+    "15m": "medium",
     "30m": "medium",
     "1h": "medium",
     "2h": "medium",
-    "4h": "medium",
     # Low frequency
+    "4h": "low",     # Moved from medium to low frequency
     "6h": "low",
     "8h": "low",
     "12h": "low",
