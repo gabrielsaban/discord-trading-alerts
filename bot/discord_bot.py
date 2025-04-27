@@ -217,14 +217,17 @@ class TradingAlertsBot(discord.Client):
             "`/unwatch symbol [interval]` - Remove a pair from watchlist\n"
             "`/list` - Show your watchlist\n"
             "`/settings` - Adjust alert thresholds\n"
-            "`/stats` - View alert statistics",
+            "`/alerts` - Enable or disable specific alert types\n"
+            "`/stats` - View alert statistics\n"
+            "`/guide` - Get guidance on optimal timeframes\n"
+            "`/help` - Show this help information\n"
+            "`/cleanup` - Delete old alert messages",
             inline=False,
         )
 
         embed.add_field(
             name="Tip",
-            value="Click the ❓ reaction on alerts to get an explanation of what the alert means.\n"
-            "Click the ✅ reaction to dismiss alerts you've seen.",
+            value="Click the ❓ reaction on alerts to get an explanation of what the alert means.\n",
             inline=False,
         )
 
@@ -1512,8 +1515,51 @@ async def stats_command(interaction: discord.Interaction, days: int = 7):
 async def help_command(interaction: discord.Interaction):
     """Show help information"""
     await interaction.response.defer(ephemeral=True)
-    await bot.send_welcome_message(interaction.channel)
-    await interaction.followup.send("Help information sent to the channel!", ephemeral=True)
+    
+    # Create embed for help command (without pin reaction option)
+    embed = discord.Embed(
+        title="🚀 Crypto Trading Alerts Bot",
+        description="I'll send alerts when technical indicators signal trading opportunities.",
+        color=discord.Color.blue(),
+    )
+
+    embed.add_field(
+        name="Getting Started",
+        value="Use `/watch BTCUSDT` to start monitoring Bitcoin\n"
+        "Use `/list` to see your watched pairs\n"
+        "Use `/settings` to customize your alerts",
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Available Commands",
+        value="`/watch symbol [interval]` - Add a trading pair to watchlist\n"
+        "`/unwatch symbol [interval]` - Remove a pair from watchlist\n"
+        "`/list` - Show your watchlist\n"
+        "`/settings` - Adjust alert thresholds\n"
+        "`/alerts` - Enable or disable specific alert types\n"
+        "`/stats` - View alert statistics\n"
+        "`/guide` - Get guidance on optimal timeframes\n"
+        "`/help` - Show this help information\n"
+        "`/cleanup` - Delete old alert messages",
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Alert Reactions",
+        value="❓ - Get an explanation of what the alert means\n",
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Credits",
+        value="Made by [gabrielsaban](https://github.com/gabrielsaban)\n"
+        "[View Project on GitHub](https://github.com/gabrielsaban/discord-trading-alerts)",
+        inline=False,
+    )
+
+    # Send the help information directly as an ephemeral response
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # Guide command for optimal timeframes
