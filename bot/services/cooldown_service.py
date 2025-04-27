@@ -11,6 +11,15 @@ from bot.services.cooldown_repository import get_cooldown_repository
 # Import the feature flags
 from bot.services.feature_flags import get_flag
 
+"""
+IMPORTANT: Interval-specific cooldowns are now implemented
+The cooldown key now includes the interval information, which means that:
+1. Alerts of the same type but on different timeframes no longer block each other
+2. Each timeframe (1m, 5m, 15m, 1h, 4h, etc.) maintains its own separate cooldown tracking
+3. This enables monitoring the same pair across multiple timeframes without interference
+
+Example: RSI oversold signals on BTCUSDT 5m don't prevent RSI oversold signals on BTCUSDT 1h
+"""
 
 class CooldownService:
     """
@@ -192,12 +201,16 @@ class CooldownService:
         now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
 
         with self.lock:
-            # Create a unique cooldown key that is independent of interval
+            # Create a unique cooldown key that includes the interval to achieve interval-specific cooldowns
             cooldown_key = f"{symbol}"
             if alert_subtype:
                 cooldown_key = f"{symbol}_{alert_subtype}"
             else:
                 cooldown_key = f"{symbol}_{alert_type}"
+                
+            # Add interval to the cooldown key if provided
+            if interval:
+                cooldown_key = f"{cooldown_key}_{interval}"
 
             # Log cooldown check attempt
             logger.debug(
@@ -210,7 +223,7 @@ class CooldownService:
 
             if is_higher_timeframe:
                 # For 4h/1d, we only check if this specific interval has triggered recently
-                specific_key = f"{cooldown_key}_{interval}"
+                specific_key = f"{cooldown_key}"  # Already includes interval
 
                 if specific_key in self.cooldowns:
                     # Get cooldown info for this specific higher timeframe alert
@@ -324,18 +337,22 @@ class CooldownService:
         now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
 
         with self.lock:
-            # Create a unique cooldown key that is independent of interval
+            # Create a unique cooldown key that includes the interval
             cooldown_key = f"{symbol}"
             if alert_subtype:
                 cooldown_key = f"{symbol}_{alert_subtype}"
             else:
                 cooldown_key = f"{symbol}_{alert_type}"
                 
+            # Add interval to the cooldown key if provided
+            if interval:
+                cooldown_key = f"{cooldown_key}_{interval}"
+                
             # Special handling for 4h/1d signals - they get a separate cooldown key
             is_higher_timeframe = interval in ["4h", "1d"]
             if is_higher_timeframe:
-                # Use a specific key that includes the interval
-                cooldown_key = f"{cooldown_key}_{interval}"
+                # The cooldown key already includes the interval
+                pass
 
             # Update or create the cooldown entry
             cooldown_data = {
@@ -459,7 +476,7 @@ class CooldownService:
             logger.info("Cleared all cooldowns")
 
     def get_cooldown_info(
-        self, symbol: str, alert_type: str, alert_subtype: str = None
+        self, symbol: str, alert_type: str, alert_subtype: str = None, interval: str = None
     ) -> Optional[Dict[str, Any]]:
         """
         Get cooldown information for a specific alert
@@ -472,6 +489,8 @@ class CooldownService:
             Alert class name (e.g., 'RsiAlert')
         alert_subtype : str, optional
             Specific alert condition (e.g., 'OVERSOLD', 'OVERBOUGHT')
+        interval : str, optional
+            Timeframe of the alert (e.g., '5m', '1h', '4h')
 
         Returns:
         --------
@@ -485,6 +504,10 @@ class CooldownService:
                 cooldown_key = f"{symbol}_{alert_subtype}"
             else:
                 cooldown_key = f"{symbol}_{alert_type}"
+                
+            # Add interval to the cooldown key if provided
+            if interval:
+                cooldown_key = f"{cooldown_key}_{interval}"
 
             # Get cooldown data
             cooldown_data = self.cooldowns.get(cooldown_key)
