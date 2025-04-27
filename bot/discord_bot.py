@@ -226,8 +226,8 @@ class TradingAlertsBot(discord.Client):
         )
 
         embed.add_field(
-            name="Tip",
-            value="Click the ❓ reaction on alerts to get an explanation of what the alert means.",
+            name="Alert Reactions",
+            value="❓ - Get a direct message with an explanation of what the alert means",
             inline=False,
         )
 
@@ -736,15 +736,15 @@ class TradingAlertsBot(discord.Client):
                         f"Question mark reaction has {len(users)} users ({len(non_bot_users)} non-bot)"
                     )
 
-                    # If we have any non-bot users, keep the explanation
+                    # If we have any non-bot users, we don't need to do anything
                     if non_bot_users:
                         has_user_question_mark = True
                         break
 
-            # If no more user question mark reactions, remove the explanation
+            # If no more user question mark reactions, remove the DMed users field
             if not has_user_question_mark:
                 logger.info(
-                    f"No more user question mark reactions, removing explanation"
+                    f"No more user question mark reactions, removing DMed users field"
                 )
 
                 # Get the original embed
@@ -754,26 +754,26 @@ class TradingAlertsBot(discord.Client):
                     logger.warning("No embed found in message")
                     return
 
-                # Find and remove the Explanation field
+                # Find and remove the DMed users field
                 new_fields = []
-                has_explanation = False
+                has_dmed_users = False
 
                 for field in embed.fields:
-                    if field.name != "Explanation":
+                    if field.name != "DMed users":
                         new_fields.append(field)
                     else:
-                        has_explanation = True
+                        has_dmed_users = True
 
                 logger.info(
-                    f"Found explanation field: {has_explanation}, fields before: {len(embed.fields)}, after: {len(new_fields)}"
+                    f"Found DMed users field: {has_dmed_users}, fields before: {len(embed.fields)}, after: {len(new_fields)}"
                 )
 
                 # If no fields were removed, no need to update
                 if len(new_fields) == len(embed.fields):
-                    logger.info("No explanation field to remove")
+                    logger.info("No DMed users field to remove")
                     return
 
-                # Create a new embed with the same properties but without the explanation field
+                # Create a new embed with the same properties but without the DMed users field
                 new_embed = discord.Embed(
                     title=embed.title,
                     description=embed.description,
@@ -796,9 +796,9 @@ class TradingAlertsBot(discord.Client):
                 # Update the message
                 try:
                     await message.edit(embed=new_embed)
-                    logger.info(f"Removed explanation from alert message {message.id}")
+                    logger.info(f"Removed DMed users from alert message {message.id}")
                 except Exception as e:
-                    logger.error(f"Error updating message to remove explanation: {e}")
+                    logger.error(f"Error updating message to remove DMed users: {e}")
 
         except Exception as e:
             logger.error(f"Error handling raw reaction remove: {e}")
@@ -894,11 +894,10 @@ class TradingAlertsBot(discord.Client):
 
             # Handle question mark reaction (add explanation)
             if payload.emoji.name == "❓":
-                # Check if we already added the explanation (to avoid adding it multiple times)
-                if any(
-                    field.name == "Explanation" for field in message.embeds[0].fields
-                ):
-                    logger.info(f"Explanation already exists, not adding again")
+                # Get the user who reacted
+                user = await self.fetch_user(payload.user_id)
+                if not user:
+                    logger.warning(f"Could not fetch user {payload.user_id}")
                     return
 
                 # Extract alert type from message content to find the right explanation
@@ -924,35 +923,77 @@ class TradingAlertsBot(discord.Client):
                 if not explanation:
                     explanation = "This alert suggests a potential trading opportunity. For more details on technical analysis, please research the specific indicator mentioned."
 
-                # Add explanation field
-                embed = message.embeds[0]
-                embed.add_field(name="Explanation", value=explanation, inline=False)
+                # Extract the symbol from the message title
+                symbol = "Unknown"
+                if message.embeds[0].title and ":" in message.embeds[0].title:
+                    symbol_part = message.embeds[0].title.split(":")[1].strip()
+                    if "(" in symbol_part:
+                        symbol = symbol_part.split("(")[0].strip()
 
-                # Update the message
+                # Send DM to the user
                 try:
-                    await message.edit(embed=embed)
-                    logger.info(f"Added explanation to alert message {message.id}")
-
-                    # Make sure the bot also has a reaction to keep the explanation
-                    # Check if the bot already has a reaction
-                    bot_has_reaction = False
-                    for r in message.reactions:
-                        if r.emoji == "❓":
-                            async for u in r.users():
-                                if u.id == self.user.id:
-                                    bot_has_reaction = True
-                                    break
-                            if bot_has_reaction:
-                                break
-
-                    # Add bot's reaction if needed
-                    if not bot_has_reaction:
-                        await message.add_reaction("❓")
-                        logger.info(
-                            f"Added bot's question mark reaction to keep explanation visible"
+                    # Create a nice embed for the DM
+                    dm_embed = discord.Embed(
+                        title=f"📊 Explanation: {alert_type}" if alert_type else "📊 Alert Explanation",
+                        description=f"**Alert for {symbol}**\n\n{explanation}",
+                        color=message.embeds[0].color
+                    )
+                    
+                    # Add timestamp
+                    dm_embed.timestamp = discord.utils.utcnow()
+                    
+                    # Send DM
+                    await user.send(embed=dm_embed)
+                    logger.info(f"Sent explanation DM to user {user.id} for alert {message.id}")
+                    
+                    # Update the message to indicate the user received a DM
+                    embed = message.embeds[0]
+                    
+                    # Check if we already have a "DMed users" field
+                    dm_field_index = None
+                    for i, field in enumerate(embed.fields):
+                        if field.name == "DMed users":
+                            dm_field_index = i
+                            break
+                    
+                    # If we found the field, update it to add this user
+                    if dm_field_index is not None:
+                        current_value = embed.fields[dm_field_index].value
+                        # Only add the user if they're not already in the list
+                        if f"<@{user.id}>" not in current_value:
+                            new_value = f"{current_value}, <@{user.id}>"
+                            embed.set_field_at(
+                                dm_field_index,
+                                name="DMed users",
+                                value=new_value,
+                                inline=False
+                            )
+                    else:
+                        # Create a new field for DMed users
+                        embed.add_field(
+                            name="DMed users",
+                            value=f"<@{user.id}>",
+                            inline=False
                         )
+                    
+                    # Update the message
+                    await message.edit(embed=embed)
+                    logger.info(f"Updated message {message.id} to show user {user.id} received explanation")
+                    
+                except discord.Forbidden:
+                    # User has DMs closed
+                    logger.warning(f"Could not DM user {user.id} - DMs may be closed")
+                    # Try to notify in channel with an ephemeral message if this was triggered in a guild
+                    if message.guild:
+                        try:
+                            temp_message = await message.channel.send(
+                                f"<@{user.id}> I couldn't send you the explanation via DM. Please enable DMs from server members.",
+                                delete_after=10
+                            )
+                        except Exception:
+                            pass
                 except Exception as e:
-                    logger.error(f"Error updating message with explanation: {e}")
+                    logger.error(f"Error sending explanation DM: {e}")
 
         except Exception as e:
             logger.error(f"Error handling raw reaction add: {e}")
@@ -1402,7 +1443,7 @@ async def help_command(interaction: discord.Interaction):
 
     embed.add_field(
         name="Alert Reactions",
-        value="❓ - Get an explanation of what the alert means",
+        value="❓ - Get a direct message with an explanation of what the alert means",
         inline=False,
     )
 
