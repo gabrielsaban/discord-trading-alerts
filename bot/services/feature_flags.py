@@ -17,6 +17,7 @@ DEFAULT_FLAGS = {
     "ENABLE_OVERRIDE_ENGINE": True,   # Enable override engine
     "ENABLE_BATCH_AGGREGATOR": False, # Disable batch aggregator
     "DEBUG_LOG_OVERRIDES": True,      # Enable debug logging for overrides
+    "ENABLE_TIMEFRAME_FILTERING": True, # Enable timeframe-specific alert filtering
 }
 
 
