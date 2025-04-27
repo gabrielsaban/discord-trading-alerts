@@ -27,7 +27,7 @@ except Exception as e:
     print(f"Error clearing log file: {e}")
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed from INFO to DEBUG to capture all logs
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),  # Console handler
@@ -46,11 +46,15 @@ from bot.discord_bot import bot, run_bot
 from bot.scheduler import get_scheduler
 
 logger = logging.getLogger("discord_trading_alerts")
+logger.setLevel(logging.DEBUG)
 
-# Set DEBUG level specifically for the alerts module
+# Ensure specific modules have DEBUG level logging
 logging.getLogger("bot.alerts").setLevel(logging.DEBUG)
-# Set DEBUG level for the scheduler module
+logging.getLogger("discord_trading_alerts.alerts").setLevel(logging.DEBUG)
 logging.getLogger("discord_trading_alerts.scheduler").setLevel(logging.DEBUG)
+logging.getLogger("trading_alerts.scheduler").setLevel(logging.DEBUG)
+logging.getLogger("bot.scheduler").setLevel(logging.DEBUG)
+logging.getLogger("trading_alerts.db").setLevel(logging.DEBUG)
 
 # Ensure data directory exists
 os.makedirs("data", exist_ok=True)
