@@ -252,17 +252,20 @@ class AlertScheduler:
                         f"Scheduled {frequency_tier} frequency checks every {check_seconds} seconds"
                     )
 
-            # Schedule batch processing task
-            self.scheduler.add_job(
-                self.process_all_batched_alerts,
-                "interval",
-                seconds=BATCH_SEND_INTERVAL,
-                id="batch_processor",
-                replace_existing=True,
-            )
-            logger.info(
-                f"Scheduled batch alert processing every {BATCH_SEND_INTERVAL} seconds"
-            )
+            # Schedule batch processing task - only if feature flag is enabled
+            if get_flag("ENABLE_BATCH_AGGREGATOR", False):
+                self.scheduler.add_job(
+                    self.process_all_batched_alerts,
+                    "interval",
+                    seconds=BATCH_SEND_INTERVAL,
+                    id="batch_processor",
+                    replace_existing=True,
+                )
+                logger.info(
+                    f"Scheduled batch alert processing every {BATCH_SEND_INTERVAL} seconds"
+                )
+            else:
+                logger.info("Batch alert processing not scheduled (batch aggregation is disabled)")
 
             # Start the scheduler
             if not self.scheduler.running:
@@ -941,6 +944,11 @@ class AlertScheduler:
 
     def process_all_batched_alerts(self):
         """Process all batched alerts across all alert managers"""
+        # Early return if batch aggregation is disabled
+        if not get_flag("ENABLE_BATCH_AGGREGATOR", False):
+            logger.debug("Skipping batch processing (batch aggregation is disabled)")
+            return
+            
         logger.debug("Processing all batched alerts")
 
         try:
