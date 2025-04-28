@@ -626,13 +626,20 @@ class AlertScheduler:
                             f"Found {len(alerts)} alerts for {user_id} on {symbol} ({interval})"
                         )
 
-                        # Modify alerts to include interval information
-                        modified_alerts = []
-                        for alert in alerts:
-                            # Add interval to be used in the title only, not in the body message
-                            # Format: original_alert | interval (will be parsed by discord_bot.py)
-                            modified_alert = f"{alert} | {interval}"
-                            modified_alerts.append(modified_alert)
+                        # Initialize notifications list
+                        notifications = []
+
+                        # Format message with alert interval for processing
+                        for alert_msg in alerts:
+                            # Format: alert_message | interval | symbol | alert_type
+                            formatted_alert = f"{alert_msg} | {interval} | {symbol}"
+                            
+                            # If the alert object has an alert_type attribute, include it in the message
+                            if hasattr(manager.alerts[symbol][0], 'alert_type'):
+                                alert_type = manager.alerts[symbol][0].alert_type
+                                formatted_alert = f"{alert_msg} | {interval} | {symbol} | {alert_type}"
+                                
+                            notifications.append(formatted_alert)
 
                         # Record alerts in the database
                         for alert in alerts:
@@ -642,8 +649,8 @@ class AlertScheduler:
                             )
 
                         # Send modified alerts with interval included
-                        if modified_alerts:
-                            self._run_callback(user_id, modified_alerts)
+                        if notifications:
+                            self._run_callback(user_id, notifications)
 
                     # Check for batched alerts ready to send
                     # Only process batches if BatchAggregator is enabled
