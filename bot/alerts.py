@@ -70,6 +70,9 @@ class AlertCondition(ABC):
         # We keep these fields for backward compatibility
         self.last_triggered = None
         self.cooldown = timedelta(minutes=cooldown_minutes)
+        # Store alert type information for easy access
+        self.alert_type = "UNKNOWN"  # Descriptive alert type (e.g. "RSI OVERSOLD")
+        self.alert_category = self.__class__.__name__  # Class name (e.g. "RsiAlert")
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
         """
@@ -114,48 +117,6 @@ class AlertCondition(ABC):
         else:
             return f"{price:.1f}"
 
-    # These methods are deprecated and should not be used
-    def calculate_dynamic_cooldown(
-        self,
-        pair,
-        atr_percentile=None,
-        is_high_volatility=False,
-        is_strong_signal=False,
-    ):
-        """
-        DEPRECATED: Use AlertManager._get_atr_adjusted_cooldown instead.
-        Legacy method for dynamic cooldowns - not used in current system.
-        """
-        raise NotImplementedError(
-            "Legacy cooldown method: calculate_dynamic_cooldown is no longer supported. Use CooldownService instead."
-        )
-
-    def is_in_cooldown(
-        self,
-        pair,
-        timestamp,
-        atr_percentile=None,
-        is_high_volatility=False,
-        is_strong_signal=False,
-    ):
-        """
-        DEPRECATED: Use AlertManager._is_globally_cooled_down instead.
-        Legacy method for cooldown checking - not used in current system.
-        """
-        raise NotImplementedError(
-            "Legacy cooldown method: is_in_cooldown is no longer supported. Use CooldownService instead."
-        )
-
-    def add_cooldown(self, pair, timestamp):
-        """
-        DEPRECATED: Use AlertManager._update_global_cooldown instead.
-        Legacy method for adding cooldowns - not used in current system.
-        """
-        raise NotImplementedError(
-            "Legacy cooldown method: add_cooldown is no longer supported. Use CooldownService instead."
-        )
-
-
 class RsiAlert(AlertCondition):
     """Alert for RSI crossing above/below thresholds"""
 
@@ -169,6 +130,7 @@ class RsiAlert(AlertCondition):
         super().__init__(symbol, cooldown_minutes)
         self.oversold = oversold
         self.overbought = overbought
+        self.alert_type = "RSI"  # Default alert_type
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
         rsi = calculate_rsi(df)
@@ -189,16 +151,28 @@ class RsiAlert(AlertCondition):
         message = None
         # Check for oversold condition (crossing below threshold)
         if latest_rsi < self.oversold and prev_rsi >= self.oversold:
+            self.alert_type = "RSI Oversold"
             logger.info(
                 f"RSI oversold alert triggered for {self.symbol}: prev_rsi={prev_rsi:.1f}, latest_rsi={latest_rsi:.1f}, threshold={self.oversold}"
             )
-            message = f"🔴 **RSI OVERSOLD**: {self.symbol} RSI at {latest_rsi:.1f}\nPrice: {price_str}\nThreshold: {self.oversold}, Latest RSI: {latest_rsi:.1f}"
+            message = (
+                f"🟥 **Price:** {price_str}  \n"
+                f"**RSI Now:** {latest_rsi:.1f}  \n"
+                f"**Threshold:** {self.oversold}  \n"
+                f"**Previous RSI:** {prev_rsi:.1f}"
+            )
         # Check for overbought condition (crossing above threshold)
         elif latest_rsi > self.overbought and prev_rsi <= self.overbought:
+            self.alert_type = "RSI Overbought"
             logger.info(
                 f"RSI overbought alert triggered for {self.symbol}: prev_rsi={prev_rsi:.1f}, latest_rsi={latest_rsi:.1f}, threshold={self.overbought}"
             )
-            message = f"🟢 **RSI OVERBOUGHT**: {self.symbol} RSI at {latest_rsi:.1f}\nPrice: {price_str}\nThreshold: {self.overbought}, Latest RSI: {latest_rsi:.1f}"
+            message = (
+                f"🟩 **Price:** {price_str}  \n"
+                f"**RSI Now:** {latest_rsi:.1f}  \n"
+                f"**Threshold:** {self.overbought}  \n"
+                f"**Previous RSI:** {prev_rsi:.1f}"
+            )
 
         return message
 
@@ -208,6 +182,7 @@ class MacdAlert(AlertCondition):
 
     def __init__(self, symbol: str, cooldown_minutes: int = 10):
         super().__init__(symbol, cooldown_minutes)
+        self.alert_type = "MACD"  # Default alert_type
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
         macd_df = calculate_macd(df)
@@ -220,12 +195,36 @@ class MacdAlert(AlertCondition):
         price_str = self.format_price(latest_price)
 
         message = None
-        # Check for bullish crossover (MACD crosses above Signal)
-        if latest["MACD"] > latest["Signal"] and prev["MACD"] <= prev["Signal"]:
-            message = f"🟢 **MACD BULLISH CROSS**: {self.symbol}\nPrice: {price_str}\nMACD: {latest['MACD']:.4f}, Signal: {latest['Signal']:.4f}, Histogram: {latest['Histogram']:.4f}"
-        # Check for bearish crossover (MACD crosses below Signal)
-        elif latest["MACD"] < latest["Signal"] and prev["MACD"] >= prev["Signal"]:
-            message = f"🔴 **MACD BEARISH CROSS**: {self.symbol}\nPrice: {price_str}\nMACD: {latest['MACD']:.4f}, Signal: {latest['Signal']:.4f}, Histogram: {latest['Histogram']:.4f}"
+        if prev["MACD"] < prev["Signal"] and latest["MACD"] >= latest["Signal"]:
+            # Bullish crossover (MACD crosses above signal line)
+            self.alert_type = "MACD Bullish Cross"
+            emoji = "🟢"
+            message = (
+                f"{emoji} **Price:** {price_str}  \n"
+                f"**MACD Line:** {latest['MACD']:.4f}  \n"
+                f"**Signal Line:** {latest['Signal']:.4f}  \n"
+                f"**Histogram:** {latest['Histogram']:.4f}  \n"
+                f"**Previous Histogram:** {prev['Histogram']:.4f}"
+            )
+            logger.info(
+                f"MACD bullish crossover alert triggered for {self.symbol}: macd={latest['MACD']:.4f}, signal={latest['Signal']:.4f}"
+            )
+        elif prev["MACD"] > prev["Signal"] and latest["MACD"] <= latest["Signal"]:
+            # Bearish crossover (MACD crosses below signal line)
+            self.alert_type = "MACD Bearish Cross"
+            emoji = "🔴"
+            message = (
+                f"{emoji} **Price:** {price_str}  \n"
+                f"**MACD Line:** {latest['MACD']:.4f}  \n"
+                f"**Signal Line:** {latest['Signal']:.4f}  \n"
+                f"**Histogram:** {latest['Histogram']:.4f}  \n"
+                f"**Previous Histogram:** {prev['Histogram']:.4f}"
+            )
+            logger.info(
+                f"MACD bearish crossover alert triggered for {self.symbol}: macd={latest['MACD']:.4f}, signal={latest['Signal']:.4f}"
+            )
+        else:
+            return None
 
         return message
 
@@ -239,6 +238,7 @@ class EmaCrossAlert(AlertCondition):
         super().__init__(symbol, cooldown_minutes)
         self.short = short
         self.long = long
+        self.alert_type = "EMA Cross"  # Default alert_type
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
         ema_df = calculate_ema_cross(df, short=self.short, long=self.long)
@@ -251,14 +251,28 @@ class EmaCrossAlert(AlertCondition):
         # Get the latest EMA values - using correct column names
         latest_short_ema = ema_df[f"EMA{self.short}"].iloc[-1]
         latest_long_ema = ema_df[f"EMA{self.long}"].iloc[-1]
+        # Calculate crossover gap
+        crossover_gap = latest_short_ema - latest_long_ema
 
         message = None
         # Check for bullish cross (short EMA crosses above long EMA)
         if ema_df["Cross_Up"].iloc[-1]:
-            message = f"🟢 **EMA BULLISH CROSS**: {self.symbol} EMA{self.short} crossed above EMA{self.long}\nPrice: {price_str}\nEMA{self.short}: {latest_short_ema:.4f}, EMA{self.long}: {latest_long_ema:.4f}"
+            self.alert_type = "EMA Bullish Cross"
+            message = (
+                f"🟢 **Price:** {price_str}  \n"
+                f"**EMA{self.short}:** {latest_short_ema:.4f}  \n"
+                f"**EMA{self.long}:** {latest_long_ema:.4f}  \n"
+                f"**Crossover Gap:** {crossover_gap:.2f}"
+            )
         # Check for bearish cross (short EMA crosses below long EMA)
         elif ema_df["Cross_Down"].iloc[-1]:
-            message = f"🔴 **EMA BEARISH CROSS**: {self.symbol} EMA{self.short} crossed below EMA{self.long}\nPrice: {price_str}\nEMA{self.short}: {latest_short_ema:.4f}, EMA{self.long}: {latest_long_ema:.4f}"
+            self.alert_type = "EMA Bearish Cross"
+            message = (
+                f"🔴 **Price:** {price_str}  \n"
+                f"**EMA{self.short}:** {latest_short_ema:.4f}  \n"
+                f"**EMA{self.long}:** {latest_long_ema:.4f}  \n"
+                f"**Crossover Gap:** {crossover_gap:.2f}"
+            )
 
         return message
 
@@ -271,6 +285,7 @@ class BollingerBandAlert(AlertCondition):
     ):
         super().__init__(symbol, cooldown_minutes)
         self.squeeze_threshold = squeeze_threshold  # For band squeeze detection
+        self.alert_type = "Bollinger Band"  # Default alert_type
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
         bb = calculate_bollinger_bands(df, length=20, std=2, normalize=True)
@@ -288,18 +303,41 @@ class BollingerBandAlert(AlertCondition):
 
         # Upper band breakout (price crosses above upper band)
         if latest_price > current["BBU"] and prev_close <= prev["BBU"]:
-            message = f"🟢 **UPPER BB BREAKOUT**: {self.symbol} Price broke above upper band\nPrice: {price_str}\nUpper Band: {current['BBU']:.4f}, Middle Band: {current['BBM']:.4f}, Lower Band: {current['BBL']:.4f}"
+            # Calculate breakout distance
+            breakout_distance = latest_price - current["BBU"]
+            self.alert_type = "Upper BB Breakout"
+            message = (
+                f"🟡 **Price:** {price_str}  \n"
+                f"**Upper Band:** {current['BBU']:.2f}  \n"
+                f"**Middle Band:** {current['BBM']:.2f}  \n"
+                f"**Lower Band:** {current['BBL']:.2f}  \n"
+                f"**Breakout Distance:** +{breakout_distance:.2f}"
+            )
 
         # Lower band breakout (price crosses below lower band)
         elif latest_price < current["BBL"] and prev_close >= prev["BBL"]:
-            message = f"🔴 **LOWER BB BREAKOUT**: {self.symbol} Price broke below lower band\nPrice: {price_str}\nUpper Band: {current['BBU']:.4f}, Middle Band: {current['BBM']:.4f}, Lower Band: {current['BBL']:.4f}"
+            # Calculate breakout distance (negative for lower band)
+            breakout_distance = latest_price - current["BBL"]
+            self.alert_type = "Lower BB Breakout"
+            message = (
+                f"🟥 **Price:** {price_str}  \n"
+                f"**Upper Band:** {current['BBU']:.2f}  \n"
+                f"**Middle Band:** {current['BBM']:.2f}  \n"
+                f"**Lower Band:** {current['BBL']:.2f}  \n"
+                f"**Breakout Distance:** {breakout_distance:.2f}"
+            )
 
         # Band squeeze (bandwidth narrowing significantly)
         elif (
             current["BandWidth"] < self.squeeze_threshold
             and current["BandWidth"] < prev["BandWidth"]
         ):
-            message = f"🟡 **BOLLINGER SQUEEZE**: {self.symbol} Bands narrowing, potential breakout\nPrice: {price_str}\nBandwidth: {current['BandWidth']:.4f}, Threshold: {self.squeeze_threshold}"
+            self.alert_type = "Bollinger Squeeze"
+            message = (
+                f"🟡 **Price:** {price_str}  \n"
+                f"**Bandwidth:** {current['BandWidth']:.2f}  \n"
+                f"**Threshold:** {self.squeeze_threshold}"
+            )
 
         return message
 
@@ -317,6 +355,8 @@ class VolumeSpikeAlert(AlertCondition):
         super().__init__(symbol, cooldown_minutes)
         self.threshold = threshold
         self.z_score = z_score
+        # Set alert type based on configuration
+        self.alert_type = "Volume Z-Score Spike" if self.z_score else "Volume Spike"
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
         vol_df = calculate_volume_spikes(
@@ -332,14 +372,33 @@ class VolumeSpikeAlert(AlertCondition):
         latest_price = df["close"].iloc[-1]
         price_str = self.format_price(latest_price)
 
-        # Determine if price moved up or down with the volume spike
-        price_change = df["close"].iloc[-1] - df["open"].iloc[-1]
-        direction = "UP 📈" if price_change > 0 else "DOWN 📉"
+        # Get previous volume multiple or z-score if available
+        prev_multiple = None
+        if len(vol_df) > 1:
+            prev_multiple = vol_df.iloc[-2]['volume_ratio'] if not self.z_score else vol_df.iloc[-2]['z_score']
+
+        # Format the previous value (if available)
+        prev_value_text = ""
+        if prev_multiple is not None:
+            if self.z_score:
+                prev_value_text = f"**Previous Z-Score:** {prev_multiple:.2f}"
+            else:
+                prev_value_text = f"**Previous Volume Multiple:** {prev_multiple:.1f}x"
 
         if self.z_score:
-            message = f"📊 **VOLUME Z-SCORE SPIKE**: {self.symbol} {direction}\nZ-score: {latest['z_score']:.1f}\nPrice: {price_str}\nThreshold: {self.threshold}, Z-score: {latest['z_score']:.2f}"
+            message = (
+                f"🟡 **Price:** {price_str}  \n"
+                f"**Current Z-Score:** {latest['z_score']:.2f}  \n"
+                f"**Threshold:** {self.threshold}  \n"
+                f"{prev_value_text}"
+            )
         else:
-            message = f"📊 **VOLUME SPIKE**: {self.symbol} {direction}\n{latest['volume_ratio']:.1f}x average\nPrice: {price_str}\nThreshold: {self.threshold}x, Current: {latest['volume_ratio']:.2f}x"
+            message = (
+                f"🟡 **Price:** {price_str}  \n"
+                f"**Current Volume Multiple:** {latest['volume_ratio']:.1f}x  \n"
+                f"**Threshold:** {self.threshold}x  \n"
+                f"{prev_value_text}"
+            )
 
         return message
 
@@ -350,6 +409,7 @@ class AdxAlert(AlertCondition):
     def __init__(self, symbol: str, threshold: int = 25, cooldown_minutes: int = 10):
         super().__init__(symbol, cooldown_minutes)
         self.threshold = threshold
+        self.alert_type = "ADX"  # Default alert_type
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
         adx_df = calculate_adx(df, length=14, threshold=self.threshold)
@@ -364,15 +424,27 @@ class AdxAlert(AlertCondition):
 
         # New strong trend starting (ADX crosses above threshold)
         if latest["Strength"] and not prev["Strength"]:
-            direction = "BULLISH 📈" if latest["Trend"] == "Bullish" else "BEARISH 📉"
-            message = f"📏 **STRONG {direction} TREND**: {self.symbol} ADX: {latest['ADX']:.1f}\nPrice: {price_str}\nThreshold: {self.threshold}, Current ADX: {latest['ADX']:.1f}, Direction: {latest['Trend']}"
+            direction = "BULLISH" if latest["Trend"] == "Bullish" else "BEARISH"
+            self.alert_type = f"Strong {latest['Trend'].upper()} Trend"
+            message = (
+                f"📏 **Price:** {price_str}  \n"
+                f"**ADX:** {latest['ADX']:.1f}\n"
+                f"**Threshold:** {self.threshold}\n"
+                f"**Direction:** {latest['Trend']}"
+            )
 
         # Trend direction change during strong trend
         elif (
             latest["Strength"] and prev["Strength"] and latest["Trend"] != prev["Trend"]
         ):
-            new_direction = "BULLISH 📈" if latest["Trend"] == "Bullish" else "BEARISH 📉"
-            message = f"🔄 **TREND REVERSAL to {new_direction}**: {self.symbol} ADX: {latest['ADX']:.1f}\nPrice: {price_str}\nThreshold: {self.threshold}, Current ADX: {latest['ADX']:.1f}, Previous Direction: {prev['Trend']}"
+            new_direction = "BULLISH" if latest["Trend"] == "Bullish" else "BEARISH"
+            self.alert_type = f"Trend Reversal to {latest['Trend'].upper()}"
+            message = (
+                f"🔄 **Price:** {price_str}  \n"
+                f"**ADX:** {latest['ADX']:.1f}\n"
+                f"**Threshold:** {self.threshold}\n"
+                f"**Direction:** {latest['Trend']}"
+            )
 
         return message
 
@@ -382,6 +454,7 @@ class PatternAlert(AlertCondition):
 
     def __init__(self, symbol: str, cooldown_minutes: int = 10):
         super().__init__(symbol, cooldown_minutes)
+        self.alert_type = "Pattern"  # Default alert_type
 
     def check(self, df: pd.DataFrame) -> Optional[str]:
         if len(df) < 5:  # Need at least 5 candles for pattern detection
@@ -396,6 +469,7 @@ class PatternAlert(AlertCondition):
 
         # Simple hammer detection (long lower wick, small body, small/no upper wick)
         if self._is_hammer(candles.iloc[-1]):
+            self.alert_type = "Hammer Pattern"
             body = abs(candles.iloc[-1]["close"] - candles.iloc[-1]["open"])
             lower_wick = (
                 min(candles.iloc[-1]["open"], candles.iloc[-1]["close"])
@@ -404,15 +478,31 @@ class PatternAlert(AlertCondition):
             upper_wick = candles.iloc[-1]["high"] - max(
                 candles.iloc[-1]["open"], candles.iloc[-1]["close"]
             )
-            message = f"🔨 **HAMMER PATTERN**: {self.symbol} Potential reversal\nPrice: {price_str}\nBody: {body:.4f}, Lower Wick: {lower_wick:.4f}, Upper Wick: {upper_wick:.4f}"
+            message = (
+                f"🔨 **Price:** {price_str}  \n"
+                f"**Body Size:** {body:.2f}  \n"
+                f"**Lower Wick:** {lower_wick:.2f}  \n"
+                f"**Upper Wick:** {upper_wick:.2f}  \n"
+                f"**Reversal Potential:** High"
+            )
 
         # Simple evening star (bullish-neutral-bearish sequence at top)
         elif self._is_evening_star(candles.iloc[-3:]):
-            message = f"⭐ **EVENING STAR**: {self.symbol} Potential bearish reversal\nPrice: {price_str}\nPattern: Bullish → Doji → Bearish, Confidence: High"
+            self.alert_type = "Evening Star Pattern"
+            message = (
+                f"⭐ **Price:** {price_str}  \n"
+                f"**Pattern:** Bullish → Doji → Bearish  \n"
+                f"**Confidence:** High"
+            )
 
         # Simple morning star (bearish-neutral-bullish sequence at bottom)
         elif self._is_morning_star(candles.iloc[-3:]):
-            message = f"⭐ **MORNING STAR**: {self.symbol} Potential bullish reversal\nPrice: {price_str}\nPattern: Bearish → Doji → Bullish, Confidence: High"
+            self.alert_type = "Morning Star Pattern"
+            message = (
+                f"⭐ **Price:** {price_str}  \n"
+                f"**Pattern:** Bearish → Doji → Bullish  \n"
+                f"**Confidence:** High"
+            )
 
         # Engulfing pattern
         elif self._is_engulfing(candles.iloc[-2:]):
@@ -421,10 +511,16 @@ class PatternAlert(AlertCondition):
                 if candles.iloc[-1]["close"] > candles.iloc[-1]["open"]
                 else "BEARISH"
             )
+            self.alert_type = f"{pattern_type} Engulfing"
             c1_body = abs(candles.iloc[-2]["close"] - candles.iloc[-2]["open"])
             c2_body = abs(candles.iloc[-1]["close"] - candles.iloc[-1]["open"])
             body_ratio = c2_body / c1_body if c1_body > 0 else 0
-            message = f"🔄 **{pattern_type} ENGULFING**: {self.symbol}\nPrice: {price_str}\nBody Ratio: {body_ratio:.2f}x, Confidence: {'High' if body_ratio > 1.5 else 'Medium'}"
+            confidence = "High" if body_ratio > 1.5 else "Medium"
+            message = (
+                f"🔄 **Price:** {price_str}  \n"
+                f"**Body Ratio:** {body_ratio:.1f}x  \n"
+                f"**Confidence:** {confidence}"
+            )
 
         return message
 
@@ -863,167 +959,6 @@ class AlertManager:
     # Dictionary to track recently queued batch alerts
     _batch_queue_track = {}
     
-    def _is_recently_queued_for_batch(self, alert_key, max_age_seconds=300):
-        """Check if an alert was recently queued for batch processing
-        
-        Parameters:
-        -----------
-        alert_key : str
-            Unique key for the alert
-        max_age_seconds : int
-            Maximum age in seconds to consider "recent"
-            
-        Returns:
-        --------
-        bool
-            True if the alert was queued recently, False otherwise
-        """
-        now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
-        if alert_key in self._batch_queue_track:
-            queued_time = self._batch_queue_track[alert_key]
-            age = (now - queued_time).total_seconds()
-            return age <= max_age_seconds
-        return False
-    
-    def _mark_queued_for_batch(self, alert_key):
-        """Mark an alert as queued for batch processing
-        
-        Parameters:
-        -----------
-        alert_key : str
-            Unique key for the alert
-        """
-        self._batch_queue_track[alert_key] = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
-        
-        # Clean up old entries to prevent memory growth
-        self._cleanup_batch_queue_track()
-    
-    def _cleanup_batch_queue_track(self, max_age_seconds=600):
-        """Clean up old entries in the batch queue tracking dictionary
-        
-        Parameters:
-        -----------
-        max_age_seconds : int
-            Maximum age in seconds to keep entries
-        """
-        now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
-        keys_to_remove = []
-        
-        for key, timestamp in self._batch_queue_track.items():
-            age = (now - timestamp).total_seconds()
-            if age > max_age_seconds:
-                keys_to_remove.append(key)
-                
-        for key in keys_to_remove:
-            del self._batch_queue_track[key]
-
-    def _queue_for_batching(
-        self,
-        symbol: str,
-        alert_type: str,
-        alert_subtype: str,
-        message: str,
-        interval: str,
-    ):
-        """Queue alert for batched sending when cooldown expires
-
-        Parameters:
-        -----------
-        symbol : str
-            Trading pair symbol
-        alert_type : str
-            Alert class name
-        alert_subtype : str
-            Alert subtype
-        message : str
-            Alert message
-        interval : str
-            Timeframe of the alert
-        """
-        if not message:
-            return
-
-        try:
-            # Import and use the BatchAggregator service
-            from bot.services.batch_aggregator import get_batch_aggregator
-            from bot.services.feature_flags import get_flag
-
-            # Calculate signal strength
-            signal_strength = self._calculate_signal_strength(
-                alert_type, alert_subtype or "", message
-            )
-
-            # Get user ID from instance if available
-            user_id = getattr(self, "current_user_id", "unknown")
-
-            # Only use batch aggregator if enabled by feature flag
-            if get_flag("ENABLE_BATCH_AGGREGATOR", False):
-                batch_aggregator = get_batch_aggregator()
-                batch_aggregator.enqueue(
-                    user_id=user_id,
-                    symbol=symbol,
-                    interval=interval,
-                    alert_type=alert_type,
-                    alert_subtype=alert_subtype,
-                    alert_msg=message,
-                    strength=signal_strength,
-                )
-                logger.info(
-                    f"Queued alert for batch aggregator: {symbol} - {alert_type} ({interval})"
-                )
-            else:
-                # BatchAggregator service is disabled, log warning
-                logger.warning(
-                    f"BatchAggregator service is disabled. Enable with ENABLE_BATCH_AGGREGATOR flag."
-                )
-
-        except ImportError:
-            # If we can't import the service, throw an error - we no longer support legacy mode
-            raise ImportError(
-                "BatchAggregator is required but not available. "
-                "Please ensure bot/services/batch_aggregator.py exists and is properly set up."
-            )
-
-    def get_batched_alerts(self, symbol: str = None) -> Dict[str, List[Dict]]:
-        """Get batched alerts for a symbol or all symbols
-
-        Parameters:
-        -----------
-        symbol : str, optional
-            Symbol to get batched alerts for. If None, get all batched alerts.
-
-        Returns:
-        --------
-        Dict[str, List[Dict]]
-            Dictionary of batched alerts by symbol
-        """
-        try:
-            # Import and use the BatchAggregator service
-            from bot.services.batch_aggregator import get_batch_aggregator
-            from bot.services.feature_flags import get_flag
-
-            # Only use batch aggregator if enabled by feature flag
-            if get_flag("ENABLE_BATCH_AGGREGATOR", False):
-                batch_aggregator = get_batch_aggregator()
-                # Process the batched alerts in the service
-                # The batch aggregator's processing should happen automatically
-                # based on its own timers, but we can trigger it manually if needed
-                return (
-                    {}
-                )  # Return empty dict since actual processing happens via callbacks
-            else:
-                # BatchAggregator service is disabled, log warning
-                logger.warning(
-                    f"BatchAggregator service is disabled. Enable with ENABLE_BATCH_AGGREGATOR flag."
-                )
-                return {}
-
-        except ImportError:
-            # If we can't import the service, throw an error - we no longer support legacy mode
-            raise ImportError(
-                "BatchAggregator is required but not available. "
-                "Please ensure bot/services/batch_aggregator.py exists and is properly set up."
-            )
 
     def _update_global_cooldown(
         self,
@@ -1249,67 +1184,3 @@ class AlertManager:
         self.current_user_id = user_id
         logger.debug(f"Set user_id to {user_id} for AlertManager")
         return self
-
-
-# Testing functionality
-if __name__ == "__main__":
-    import time
-
-    from binance import fetch_market_data
-
-    def test_alerts(symbol: str = "BTCUSDT", interval: str = "15m", limit: int = 100):
-        print(f"\n===== Testing alerts for {symbol} ({interval}) =====\n")
-
-        # Create alert manager
-        manager = AlertManager()
-
-        # Add all alert types
-        manager.add_alert(RsiAlert(symbol, oversold=30, overbought=70))
-        manager.add_alert(MacdAlert(symbol))
-        manager.add_alert(EmaCrossAlert(symbol, short=9, long=21))
-        manager.add_alert(BollingerBandAlert(symbol))
-        manager.add_alert(VolumeSpikeAlert(symbol, threshold=2.0))
-        manager.add_alert(AdxAlert(symbol))
-        manager.add_alert(PatternAlert(symbol))
-
-        # Fetch data
-        df = fetch_market_data(symbol=symbol, interval=interval, limit=limit)
-
-        # Check alerts - pass the interval parameter
-        alerts = manager.check_alerts(symbol, df, interval)
-
-        if alerts:
-            print(f"\nTriggered alerts for {symbol}:")
-            for alert in alerts:
-                print(f"  {alert}")
-        else:
-            print(f"No alerts triggered for {symbol}")
-
-        return alerts
-
-    def test_multiple_pairs():
-        pairs = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT"]
-        intervals = ["15m", "1h", "4h"]
-
-        results = {}
-
-        for pair in pairs:
-            pair_results = []
-            for interval in intervals:
-                alerts = test_alerts(pair, interval)
-                if alerts:
-                    pair_results.extend(alerts)
-            results[pair] = pair_results
-
-        # Summary
-        print("\n===== ALERT TESTING SUMMARY =====\n")
-        total_alerts = sum(len(alerts) for alerts in results.values())
-        print(f"Total alerts triggered: {total_alerts}")
-
-        for pair, alerts in results.items():
-            print(f"\n{pair}: {len(alerts)} alerts")
-            for alert in alerts:
-                print(f"  {alert}")
-
-    # Run tests
-    # test_multiple_pairs()

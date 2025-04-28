@@ -221,7 +221,7 @@ class TradingAlertsBot(discord.Client):
             "`/stats` - View alert statistics\n"
             "`/guide` - Get guidance on optimal timeframes\n"
             "`/help` - Show this help information\n"
-            "`/cleanup` - Delete old alert messages (admin only)",
+            "`/cleanup` - Delete old alert messages",
             inline=False,
         )
 
@@ -265,10 +265,7 @@ class TradingAlertsBot(discord.Client):
             )
             return
 
-        # Group alerts by channel, symbol, and interval for consolidated notifications
-        alerts_by_channel = {}
-
-        # Process each channel the user has registered
+        # Send alerts to all registered channels
         for channel in self.alert_channels[user_id]:
             try:
                 # Try to get a fresh channel reference to avoid stale references
@@ -277,13 +274,6 @@ class TradingAlertsBot(discord.Client):
                     fetched_channel = self.get_channel(channel.id)
                     if fetched_channel is not None:
                         current_channel = fetched_channel
-
-                # Initialize this channel's alerts if not already present
-                if current_channel.id not in alerts_by_channel:
-                    alerts_by_channel[current_channel.id] = {
-                        "channel": current_channel,
-                        "alerts": {}
-                    }
 
                 # Process each alert
                 for alert in alerts:
@@ -313,21 +303,101 @@ class TradingAlertsBot(discord.Client):
                         # Use only the alert message part without the interval
                         clean_alert = alert_parts[0].strip()
 
-                        # Create a unique key for this alert in this channel
-                        alert_key = f"{symbol}_{interval}_{clean_alert}"
+                        # Add user mention and handle the pipe separator
+                        user_mention = f"<@{user_id}>"
+                        
+                        # Detect if this is a batch summary
+                        is_batch_summary = "ALERT SUMMARY" in clean_alert
+                        
+                        if is_batch_summary:
+                            # For batch summaries, we need special handling
+                            # Format the reformatted alert with user mention
+                            reformatted_alert = f"{user_mention}\n{clean_alert}"
+                            
+                            # Count how many alerts are in the summary
+                            alert_count = 0
+                            # Look for lines like "1.", "2.", etc.
+                            for line in clean_alert.split("\n"):
+                                if line.strip().startswith(("1.", "2.", "3.")):
+                                    alert_count += 1
 
-                        # Add to the grouped alerts
-                        if alert_key not in alerts_by_channel[current_channel.id]["alerts"]:
-                            alerts_by_channel[current_channel.id]["alerts"][alert_key] = {
-                                "symbol": symbol,
-                                "interval": interval,
-                                "clean_alert": clean_alert,
-                                "users": set(),
-                                "is_batch_summary": "ALERT SUMMARY" in clean_alert
-                            }
+                            # Extract the total count from the "more signals" line
+                            more_signals = 0
+                            for line in clean_alert.split("\n"):
+                                if "more signals not shown" in line:
+                                    try:
+                                        more_signals = int(
+                                            line.split("_")[1].split()[0]
+                                        )
+                                    except:
+                                        pass
 
-                        # Add this user to the list of users for this alert
-                        alerts_by_channel[current_channel.id]["alerts"][alert_key]["users"].add(user_id)
+                            total_alerts = alert_count + more_signals
+                            title = f"🔔 Batch Summary: {symbol} ({total_alerts} alerts)"
+                        elif "\nPrice: " in clean_alert:
+                            # Regular alert with price
+                            parts = clean_alert.split("\nPrice: ")
+                            alert_header = parts[0]
+                            price_and_details = parts[1]
+
+                            # Check if there are detailed threshold values after the price
+                            if "\n" in price_and_details:
+                                price_part, details_part = price_and_details.split(
+                                    "\n", 1
+                                )
+                                reformatted_alert = f"{user_mention}\n{alert_header}\nPrice: {price_part}\n{details_part}"
+                                logger.debug(
+                                    f"Alert with detailed threshold info: {details_part}"
+                                )
+                            else:
+                                reformatted_alert = f"{user_mention}\n{alert_header}\nPrice: {price_and_details}"
+                        else:
+                            # Regular alert without price
+                            reformatted_alert = f"{user_mention}\n{clean_alert}"
+
+                        # Set title for regular alerts
+                        if not is_batch_summary:
+                            title = f"⚠️ Alert: {symbol} ({interval})"
+
+                        # Create embed with custom title
+                        embed = discord.Embed(
+                            title=title,
+                            description=reformatted_alert,
+                            color=self._get_color_for_alert(alert),
+                        )
+
+                        # Add timestamp
+                        embed.timestamp = discord.utils.utcnow()
+
+                        # Simple direct send without any nested coroutines or tasks
+                        try:
+                            message = await current_channel.send(embed=embed)
+                            logger.info(
+                                f"Sent alert for {symbol} ({interval}) to channel {current_channel.id}"
+                            )
+
+                            # Add only question mark reaction for explanation
+                            await message.add_reaction("❓")
+
+                            # Extract alert type for explanations
+                            alert_type = ""
+                            if "**" in alert:
+                                parts = alert.split("**")
+                                if len(parts) >= 3:
+                                    alert_type = parts[
+                                        1
+                                    ]  # Get text between first set of **
+
+                            # Store message ID and alert type
+                            self.alert_messages[message.id] = alert_type
+
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to send alert to channel {current_channel.id}: {e}"
+                            )
+
+                        # Add a small delay between alerts to avoid rate limiting
+                        await asyncio.sleep(1.0)
 
                     except Exception as e:
                         logger.error(
@@ -336,109 +406,8 @@ class TradingAlertsBot(discord.Client):
             except Exception as e:
                 logger.error(f"Error accessing channel for user {user_id}: {e}")
                 import traceback
+
                 logger.error(f"Alert error details: {traceback.format_exc()}")
-
-        # Now send consolidated alerts for each channel
-        for channel_id, channel_data in alerts_by_channel.items():
-            current_channel = channel_data["channel"]
-            
-            for alert_key, alert_data in channel_data["alerts"].items():
-                symbol = alert_data["symbol"]
-                interval = alert_data["interval"]
-                clean_alert = alert_data["clean_alert"]
-                is_batch_summary = alert_data["is_batch_summary"]
-                
-                # Create user mentions string
-                user_mentions = " ".join([f"<@{uid}>" for uid in alert_data["users"]])
-                
-                if is_batch_summary:
-                    # For batch summaries
-                    reformatted_alert = f"{user_mentions}\n{clean_alert}"
-                    
-                    # Count how many alerts are in the summary
-                    alert_count = 0
-                    # Look for lines like "1.", "2.", etc.
-                    for line in clean_alert.split("\n"):
-                        if line.strip().startswith(("1.", "2.", "3.")):
-                            alert_count += 1
-
-                    # Extract the total count from the "more signals" line
-                    more_signals = 0
-                    for line in clean_alert.split("\n"):
-                        if "more signals not shown" in line:
-                            try:
-                                more_signals = int(
-                                    line.split("_")[1].split()[0]
-                                )
-                            except:
-                                pass
-
-                    total_alerts = alert_count + more_signals
-                    title = f"🔔 Batch Summary: {symbol} ({total_alerts} alerts)"
-                elif "\nPrice: " in clean_alert:
-                    # Regular alert with price
-                    parts = clean_alert.split("\nPrice: ")
-                    alert_header = parts[0]
-                    price_and_details = parts[1]
-
-                    # Check if there are detailed threshold values after the price
-                    if "\n" in price_and_details:
-                        price_part, details_part = price_and_details.split(
-                            "\n", 1
-                        )
-                        reformatted_alert = f"{user_mentions}\n{alert_header}\nPrice: {price_part}\n{details_part}"
-                        logger.debug(
-                            f"Alert with detailed threshold info: {details_part}"
-                        )
-                    else:
-                        reformatted_alert = f"{user_mentions}\n{alert_header}\nPrice: {price_and_details}"
-                else:
-                    # Regular alert without price
-                    reformatted_alert = f"{user_mentions}\n{clean_alert}"
-
-                # Set title for regular alerts
-                if not is_batch_summary:
-                    title = f"⚠️ Alert: {symbol} ({interval})"
-
-                # Create embed with custom title
-                embed = discord.Embed(
-                    title=title,
-                    description=reformatted_alert,
-                    color=self._get_color_for_alert(clean_alert),
-                )
-
-                # Add timestamp
-                embed.timestamp = discord.utils.utcnow()
-
-                # Send the alert
-                try:
-                    message = await current_channel.send(embed=embed)
-                    logger.info(
-                        f"Sent consolidated alert for {symbol} ({interval}) to channel {current_channel.id} mentioning {len(alert_data['users'])} users"
-                    )
-
-                    # Add only question mark reaction for explanation
-                    await message.add_reaction("❓")
-
-                    # Extract alert type for explanations
-                    alert_type = ""
-                    if "**" in clean_alert:
-                        parts = clean_alert.split("**")
-                        if len(parts) >= 3:
-                            alert_type = parts[
-                                1
-                            ]  # Get text between first set of **
-
-                    # Store message ID and alert type
-                    self.alert_messages[message.id] = alert_type
-
-                except Exception as e:
-                    logger.error(
-                        f"Failed to send consolidated alert to channel {current_channel.id}: {e}"
-                    )
-
-                # Add a small delay between alerts to avoid rate limiting
-                await asyncio.sleep(1.0)
 
     def _get_color_for_alert(self, alert: str) -> discord.Color:
         """Get the appropriate color for an alert based on its type"""
@@ -1468,7 +1437,7 @@ async def help_command(interaction: discord.Interaction):
         "`/stats` - View alert statistics\n"
         "`/guide` - Get guidance on optimal timeframes\n"
         "`/help` - Show this help information\n"
-        "`/cleanup` - Delete old alert messages (admin only)",
+        "`/cleanup` - Delete old alert messages",
         inline=False,
     )
 
@@ -1691,11 +1660,10 @@ async def on_app_command_error(
 
 # Add cleanup command
 @bot.tree.command(
-    name="cleanup", description="Delete old alert messages from the channel (admin only)"
+    name="cleanup", description="Delete old alert messages from the channel"
 )
 @app_commands.describe(count="Maximum number of messages to check (default: 50)")
 @app_commands.checks.cooldown(1, 30)  # Limit usage to once every 30 seconds
-@app_commands.checks.has_permissions(administrator=True)  # Require admin permissions
 async def cleanup_command(interaction: discord.Interaction, count: int = 50):
     """Clean up old alert messages from the channel"""
     await interaction.response.defer(ephemeral=True)
