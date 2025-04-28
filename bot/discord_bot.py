@@ -76,8 +76,8 @@ ALERT_EXPLANATIONS = {
     "TREND REVERSAL to BULLISH": "The trend appears to be changing from downward to upward. This may be an opportunity to buy at the beginning of a new uptrend.",
     "TREND REVERSAL to BEARISH": "The trend appears to be changing from upward to downward. This may be an opportunity to sell before a potential downtrend.",
     "HAMMER PATTERN": "A candlestick pattern showing potential trend reversal from downward to upward. The market may have rejected lower prices, suggesting buying support.",
-    "EVENING STAR": "A bearish reversal pattern that appears at the top of an uptrend. It suggests the upward momentum is weakening and prices may start falling.",
-    "MORNING STAR": "A bullish reversal pattern that appears at the bottom of a downtrend. It suggests the downward momentum is weakening and prices may start rising.",
+    "EVENING STAR PATTERN": "A bearish reversal pattern that appears at the top of an uptrend. It suggests the upward momentum is weakening and prices may start falling.",
+    "MORNING STAR PATTERN": "A bullish reversal pattern that appears at the bottom of a downtrend. It suggests the downward momentum is weakening and prices may start rising.",
     "BULLISH ENGULFING": "A candlestick pattern where a green candle completely engulfs the previous red candle. This suggests buying pressure has overwhelmed selling pressure.",
     "BEARISH ENGULFING": "A candlestick pattern where a red candle completely engulfs the previous green candle. This suggests selling pressure has overwhelmed buying pressure.",
 }
@@ -279,15 +279,26 @@ class TradingAlertsBot(discord.Client):
                 for alert in alerts:
                     try:
                         # Extract symbol from alert message
-                        symbol = (
-                            alert.split(":")[1].split()[0]
-                            if ":" in alert
-                            else "Unknown"
-                        )
-
-                        # Get interval from the alert message using a parameter
-                        # Format should be: alert_message | interval
+                        # First try from the pipe-delimited format
+                        symbol = "Unknown"
                         alert_parts = alert.split("|")
+                        
+                        # Format should be: alert_message | interval | symbol | alert_type
+                        # We'll modify scheduler.py to include symbol in the message
+                        if len(alert_parts) >= 3:
+                            # Use symbol from third part if available
+                            symbol_part = alert_parts[2].strip()
+                            if symbol_part and symbol_part != "Unknown":
+                                symbol = symbol_part
+                        
+                        # If we still don't have a symbol, try old method
+                        if symbol == "Unknown" and ":" in alert:
+                            try:
+                                symbol = alert.split(":")[1].split()[0]
+                            except:
+                                symbol = "Unknown"
+                                
+                        # Get interval from the alert message
                         interval = "Unknown"
                         if len(alert_parts) >= 2:
                             # Extract interval from the second part
@@ -303,38 +314,26 @@ class TradingAlertsBot(discord.Client):
                         # Use only the alert message part without the interval
                         clean_alert = alert_parts[0].strip()
 
-                        # Add user mention and handle the pipe separator
+                        # Add user mention
                         user_mention = f"<@{user_id}>"
                         
-                        # Detect if this is a batch summary
-                        is_batch_summary = "ALERT SUMMARY" in clean_alert
-                        
-                        if is_batch_summary:
-                            # For batch summaries, we need special handling
-                            # Format the reformatted alert with user mention
-                            reformatted_alert = f"{user_mention}\n{clean_alert}"
-                            
-                            # Count how many alerts are in the summary
-                            alert_count = 0
-                            # Look for lines like "1.", "2.", etc.
-                            for line in clean_alert.split("\n"):
-                                if line.strip().startswith(("1.", "2.", "3.")):
-                                    alert_count += 1
+                        # Extract alert type for explanations
+                        alert_type = ""
+                        if "**" in alert:
+                            parts = alert.split("**")
+                            if len(parts) >= 3:
+                                alert_type = parts[1]  # Get text between first set of **
 
-                            # Extract the total count from the "more signals" line
-                            more_signals = 0
-                            for line in clean_alert.split("\n"):
-                                if "more signals not shown" in line:
-                                    try:
-                                        more_signals = int(
-                                            line.split("_")[1].split()[0]
-                                        )
-                                    except:
-                                        pass
+                        # Try to get alert type from AlertManager if available
+                        # New format: alert_message | interval | symbol | alert_type
+                        if len(alert_parts) >= 4 and alert_parts[3].strip():
+                            alert_type = alert_parts[3].strip()
+                        # Fall back to old format if needed
+                        elif len(alert_parts) >= 3 and alert_parts[2].strip() and not alert_parts[2].strip() in ["BTCUSDT", "ETHUSDT"]:
+                            # This handles the old format where the third part is alert_type, not symbol
+                            alert_type = alert_parts[2].strip()
 
-                            total_alerts = alert_count + more_signals
-                            title = f"🔔 Batch Summary: {symbol} ({total_alerts} alerts)"
-                        elif "\nPrice: " in clean_alert:
+                        if "\nPrice: " in clean_alert:
                             # Regular alert with price
                             parts = clean_alert.split("\nPrice: ")
                             alert_header = parts[0]
@@ -355,9 +354,12 @@ class TradingAlertsBot(discord.Client):
                             # Regular alert without price
                             reformatted_alert = f"{user_mention}\n{clean_alert}"
 
-                        # Set title for regular alerts
-                        if not is_batch_summary:
-                            title = f"⚠️ Alert: {symbol} ({interval})"
+                        # Set new title format
+                        title = f"⚡ {symbol} ({interval})"
+                        
+                        # Add alert type to title if available
+                        if alert_type:
+                            title = f"⚡ {symbol} ({interval}) - {alert_type}"
 
                         # Create embed with custom title
                         embed = discord.Embed(
@@ -378,15 +380,6 @@ class TradingAlertsBot(discord.Client):
 
                             # Add only question mark reaction for explanation
                             await message.add_reaction("❓")
-
-                            # Extract alert type for explanations
-                            alert_type = ""
-                            if "**" in alert:
-                                parts = alert.split("**")
-                                if len(parts) >= 3:
-                                    alert_type = parts[
-                                        1
-                                    ]  # Get text between first set of **
 
                             # Store message ID and alert type
                             self.alert_messages[message.id] = alert_type
@@ -494,107 +487,6 @@ class TradingAlertsBot(discord.Client):
             self.db.unregister_alert_channel(user_id, str(channel.id))
             logger.info(f"Unregistered channel {channel.id} for user {user_id}")
 
-    async def send_test_alerts(self):
-        """Send examples of all possible alert types to a specific user and channel"""
-        # Define the target user ID and channel ID
-        user_id = "153242761531752449"
-        channel_id = 1363459585435897929
-
-        # Make sure the bot is ready before proceeding
-        if not self.is_ready():
-            logger.warning("Bot not ready yet, waiting before sending test alerts...")
-            await asyncio.sleep(5)
-
-        # Try to get the channel
-        channel = self.get_channel(channel_id)
-        if not channel:
-            logger.error(f"Could not find channel with ID {channel_id}")
-            return
-
-        # Register the channel for the user
-        self.db.create_user(user_id, "Test User")
-        self.register_channel(user_id, channel)
-
-        # Define example alerts for all types
-        symbol = "BTCUSDT"
-        interval = "15m"  # Use 15m as test interval
-        price = "42,069.42"
-        user_mention = f"<@{user_id}>"
-        test_alerts = [
-            # RSI alerts
-            f"{user_mention}\n🔴 **RSI OVERSOLD**: {symbol} RSI at 29.8\nPrice: {price}",
-            f"{user_mention}\n🟢 **RSI OVERBOUGHT**: {symbol} RSI at 70.5\nPrice: {price}",
-            # MACD alerts
-            f"{user_mention}\n🟢 **MACD BULLISH CROSS**: {symbol}\nPrice: {price}",
-            f"{user_mention}\n🔴 **MACD BEARISH CROSS**: {symbol}\nPrice: {price}",
-            # EMA alerts
-            f"{user_mention}\n🟢 **EMA BULLISH CROSS**: {symbol} EMA9 crossed above EMA21\nPrice: {price}",
-            f"{user_mention}\n🔴 **EMA BEARISH CROSS**: {symbol} EMA9 crossed below EMA21\nPrice: {price}",
-            # Bollinger Band alerts
-            f"{user_mention}\n🟢 **UPPER BB BREAKOUT**: {symbol} Price broke above upper band\nPrice: {price}",
-            f"{user_mention}\n🔴 **LOWER BB BREAKOUT**: {symbol} Price broke below lower band\nPrice: {price}",
-            f"{user_mention}\n🟡 **BOLLINGER SQUEEZE**: {symbol} Bands narrowing, potential breakout\nPrice: {price}",
-            # Volume alerts
-            f"{user_mention}\n📊 **VOLUME SPIKE**: {symbol} Volume 3.2x above average\nPrice: {price}",
-            # ADX alerts
-            f"{user_mention}\n📏 **STRONG BULLISH 📈 TREND**: {symbol} ADX: 28.5\nPrice: {price}",
-            f"{user_mention}\n📏 **STRONG BEARISH 📉 TREND**: {symbol} ADX: 26.8\nPrice: {price}",
-            f"{user_mention}\n🔄 **TREND REVERSAL to BULLISH 📈**: {symbol} ADX: 30.2\nPrice: {price}",
-            f"{user_mention}\n🔄 **TREND REVERSAL to BEARISH 📉**: {symbol} ADX: 29.7\nPrice: {price}",
-            # Pattern alerts
-            f"{user_mention}\n🔨 **HAMMER PATTERN**: {symbol} Potential reversal\nPrice: {price}",
-            f"{user_mention}\n⭐ **EVENING STAR**: {symbol} Potential bearish reversal\nPrice: {price}",
-            f"{user_mention}\n⭐ **MORNING STAR**: {symbol} Potential bullish reversal\nPrice: {price}",
-            f"{user_mention}\n🔄 **BULLISH ENGULFING**: {symbol}\nPrice: {price}",
-            f"{user_mention}\n🔄 **BEARISH ENGULFING**: {symbol}\nPrice: {price}",
-        ]
-
-        logger.info(f"Sending {len(test_alerts)} test alerts to channel {channel_id}")
-
-        # Send each alert with a delay to avoid rate limiting
-        for alert in test_alerts:
-            try:
-                # Extract symbol from alert message
-                alert_symbol = (
-                    alert.split(":")[1].split()[0] if ":" in alert else "Unknown"
-                )
-
-                # Create embed with interval
-                embed = discord.Embed(
-                    title=f"⚠️ Alert: {alert_symbol} *({interval})*",
-                    description=alert,
-                    color=self._get_color_for_alert(alert),
-                )
-
-                # Add timestamp
-                embed.timestamp = discord.utils.utcnow()
-
-                # Send the message
-                message = await channel.send(embed=embed)
-                logger.info(f"Sent test alert: {alert[:30]}...")
-
-                # Add reactions: checkmark to delete and question mark for explanation
-                await message.add_reaction("✅")
-                await message.add_reaction("❓")
-
-                # Extract alert type for explanations
-                alert_type = ""
-                if "**" in alert:
-                    parts = alert.split("**")
-                    if len(parts) >= 3:
-                        alert_type = parts[1]  # Get text between first set of **
-
-                # Store message ID and alert type
-                self.alert_messages[message.id] = alert_type
-
-                # Add delay between messages
-                await asyncio.sleep(1.0)
-
-            except Exception as e:
-                logger.error(f"Error sending test alert: {e}")
-
-        logger.info("Finished sending all test alerts")
-
     async def periodic_cleanup_task(self):
         """Background task to periodically clean up old alert messages"""
         # Wait until the bot is ready before starting cleanup
@@ -643,7 +535,7 @@ class TradingAlertsBot(discord.Client):
                                         and message.embeds
                                         and len(message.embeds) > 0
                                         and message.embeds[0].title
-                                        and "Alert:" in message.embeds[0].title
+                                        and "⚡" in message.embeds[0].title
                                     ):
                                         messages_to_delete.append(message)
 
@@ -717,7 +609,7 @@ class TradingAlertsBot(discord.Client):
                 message.embeds
                 and len(message.embeds) > 0
                 and message.embeds[0].title
-                and "Alert:" in message.embeds[0].title
+                and "⚡" in message.embeds[0].title
             )
 
             if not is_alert:
@@ -886,7 +778,7 @@ class TradingAlertsBot(discord.Client):
                 message.embeds
                 and len(message.embeds) > 0
                 and message.embeds[0].title
-                and "Alert:" in message.embeds[0].title
+                and "⚡" in message.embeds[0].title
             )
 
             if not is_alert:
@@ -916,7 +808,8 @@ class TradingAlertsBot(discord.Client):
                 explanation = None
                 if alert_type:
                     for key, value in ALERT_EXPLANATIONS.items():
-                        if key in alert_type:
+                        # Case-insensitive comparison
+                        if key.upper() in alert_type.upper():
                             explanation = value
                             break
 
@@ -925,10 +818,14 @@ class TradingAlertsBot(discord.Client):
 
                 # Extract the symbol from the message title
                 symbol = "Unknown"
-                if message.embeds[0].title and ":" in message.embeds[0].title:
-                    symbol_part = message.embeds[0].title.split(":")[1].strip()
-                    if "(" in symbol_part:
-                        symbol = symbol_part.split("(")[0].strip()
+                if message.embeds[0].title:
+                    # New title format is: ⚡ {symbol} ({interval}) - {alert_type}
+                    title_parts = message.embeds[0].title.split()
+                    if len(title_parts) >= 2:  # At minimum ["⚡", "BTCUSDT", "..."]
+                        symbol = title_parts[1]  # Get the symbol which is the second part
+                        # Remove any trailing characters if needed
+                        if "(" in symbol:
+                            symbol = symbol.split("(")[0].strip()
 
                 # Send DM to the user
                 try:
@@ -1693,12 +1590,16 @@ async def cleanup_command(interaction: discord.Interaction, count: int = 50):
             if message.created_at > command_time:
                 continue
 
-            # Check if this is our alert message or batch summary
-            is_bot_message = message.author.id == bot.user.id and message.embeds and len(message.embeds) > 0 and message.embeds[0].title
-            is_alert = is_bot_message and "Alert:" in message.embeds[0].title
-            is_summary = is_bot_message and "Batch Summary:" in message.embeds[0].title
+            # Check if this is our alert message
+            is_alert = (
+                message.author.id == bot.user.id 
+                and message.embeds 
+                and len(message.embeds) > 0 
+                and message.embeds[0].title
+                and "⚡" in message.embeds[0].title
+            )
 
-            if is_alert or is_summary:
+            if is_alert:
                 try:
                     await message.delete()
                     deleted_count += 1
@@ -1714,7 +1615,7 @@ async def cleanup_command(interaction: discord.Interaction, count: int = 50):
 
         # Send confirmation
         await interaction.followup.send(
-            f"✅ Cleanup complete! Checked {messages_checked} messages and deleted {deleted_count} alert and summary messages.",
+            f"✅ Cleanup complete! Checked {messages_checked} messages and deleted {deleted_count} alert messages.",
             ephemeral=True,
         )
     except Exception as e:
