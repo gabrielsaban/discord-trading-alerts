@@ -89,7 +89,7 @@ Strong signals can override cooldowns when they're significantly more important:
 - [x] Make all command responses ephemeral
 - [x] Timeframe-specific alert types - limit short timeframes (1m, 5m) to only useful indicators like RSI and volume
 - [x] Interval-specific cooldowns - separate cooldown tracking per interval so alerts on different timeframes don't block each other
-- [X] Enhanced alert targeting - mention all users watching a particular symbol/interval instead of duplicating messages
+- [ ] Enhanced alert targeting - mention all users watching a particular symbol/interval instead of duplicating messages
 - [ ] Remove any batch summary reference
 - [ ] `/monitor` command to display permanent embeds with live crypto pair prices and current indicator statuses
 - [ ] Config centralization - move all thresholds, periods, jitter %, etc. into a central YAML/JSON config for runtime tweaks
