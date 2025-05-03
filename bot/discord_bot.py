@@ -771,51 +771,42 @@ class TradingAlertsBot(discord.Client):
                     logger.warning(f"Could not fetch user {payload.user_id}")
                     return
 
-                # Extract alert type from message content to find the right explanation
-                alert_type = None
-                embed_description = message.embeds[0].description
-
-                if embed_description and "**" in embed_description:
-                    # Try to extract the alert type from between ** markers
-                    parts = embed_description.split("**")
-                    if len(parts) >= 3:
-                        alert_type = parts[
-                            1
-                        ].strip()  # Get text between first set of **
-
-                # Find matching explanation
-                explanation = None
-                if alert_type:
+                # Send DM to the user
+                try:
+                    # Extract symbol and alert type from the title
+                    symbol = "Unknown"
+                    alert_type = "Unknown"
+                    
+                    if message.embeds[0].title:
+                        title = message.embeds[0].title
+                        
+                        # Extract symbol from title
+                        # New title format is: ⚡ {symbol} ({interval}) - {alert_type}
+                        title_parts = title.split()
+                        if len(title_parts) >= 2:  # At minimum ["⚡", "BTCUSDT", "..."]
+                            symbol = title_parts[1]  # Get the symbol which is the second part
+                            # Remove any trailing characters if needed
+                            if "(" in symbol:
+                                symbol = symbol.split("(")[0].strip()
+                        
+                        # Extract alert type - split on " - " to get the alert type
+                        if " - " in title:
+                            alert_type = title.split(" - ")[1].strip()
+                    
+                    # Find matching explanation
+                    explanation = "This alert suggests a potential trading opportunity. For more details on technical analysis, please research the specific indicator mentioned."
+                    
+                    # Look for matching explanation in ALERT_EXPLANATIONS
                     for key, value in ALERT_EXPLANATIONS.items():
                         # Case-insensitive comparison
                         if key.upper() in alert_type.upper():
                             explanation = value
                             break
-
-                if not explanation:
-                    explanation = "This alert suggests a potential trading opportunity. For more details on technical analysis, please research the specific indicator mentioned."
-
-                # Extract the symbol from the message title
-                symbol = "Unknown"
-                if message.embeds[0].title:
-                    # New title format is: ⚡ {symbol} ({interval}) - {alert_type}
-                    title_parts = message.embeds[0].title.split()
-                    if len(title_parts) >= 2:  # At minimum ["⚡", "BTCUSDT", "..."]
-                        symbol = title_parts[1]  # Get the symbol which is the second part
-                        # Remove any trailing characters if needed
-                        if "(" in symbol:
-                            symbol = symbol.split("(")[0].strip()
-
-                # Send DM to the user
-                try:
-                    # Extract the original title and description
-                    original_title = message.embeds[0].title if message.embeds[0].title else "Crypto Alert"
-                    original_description = message.embeds[0].description if message.embeds[0].description else ""
                     
-                    # Create a nice embed for the DM
+                    # Create a nice embed for the DM with the requested format
                     dm_embed = discord.Embed(
-                        title=f"📊 {original_title}",
-                        description=f"{original_description}\n\n**Explanation:**\n{explanation}",
+                        title=f"📊  Explanation: {alert_type}",
+                        description=f"*Alert for {symbol}*\n\n{explanation}",
                         color=message.embeds[0].color
                     )
                     
