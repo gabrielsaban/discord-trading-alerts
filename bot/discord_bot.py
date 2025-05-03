@@ -291,11 +291,11 @@ class TradingAlertsBot(discord.Client):
                 clean_alert = alert_parts[0].strip()
                 
                 # Set title format
-                title = f"⚡ {symbol} ({interval})"
+                title = f"⚡  {symbol} ({interval})"
                 
                 # Add alert type to title if available
                 if alert_type:
-                    title = f"⚡ {symbol} ({interval}) - {alert_type}"
+                    title = f"⚡  {symbol} ({interval}) - {alert_type}"
                 
                 # Format the alert message
                 if "\nPrice: " in clean_alert:
@@ -372,11 +372,11 @@ class TradingAlertsBot(discord.Client):
 
     def _get_color_for_alert(self, alert: str) -> discord.Color:
         """Get the appropriate color for an alert based on its type"""
-        if "🟢" in alert or "BULLISH" in alert:
+        if "🟢" in alert or "BULLISH" in alert or "🟩" in alert:
             return discord.Color.green()
-        elif "🔴" in alert or "BEARISH" in alert:
+        elif "🔴" in alert or "BEARISH" in alert or "🟥" in alert:
             return discord.Color.red()
-        elif "🟡" in alert or "SQUEEZE" in alert:
+        elif "🟡" in alert or "SQUEEZE" in alert or "🟨" in alert:
             return discord.Color.gold()
         else:
             return discord.Color.blue()
