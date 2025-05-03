@@ -1010,8 +1010,8 @@ class AlertManager:
 
     def check_alerts(
         self, symbol: str, df: pd.DataFrame, interval: str = None, market_data=None
-    ) -> List[str]:
-        """Check all alerts for a symbol and return triggered messages
+    ) -> List[Tuple[str, AlertCondition]]:
+        """Check all alerts for a symbol and return triggered messages with their alert objects
 
         Parameters:
         -----------
@@ -1023,6 +1023,11 @@ class AlertManager:
             Timeframe of the data (e.g., '5m', '1h', '4h')
         market_data : pd.DataFrame, optional
             Additional market data with ATR information
+            
+        Returns:
+        --------
+        List[Tuple[str, AlertCondition]]
+            List of tuples containing (alert_message, alert_object) for each triggered alert
         """
         import time
         check_start = time.time()
@@ -1080,7 +1085,8 @@ class AlertManager:
                 update_time = time.time() - update_start
                 logger.debug(f"Updated cooldown for {alert_type} ({alert_subtype}) in {update_time:.2f}s")
                 
-                triggered.append(message)
+                # Store the message along with its alert object
+                triggered.append((message, alert))
             else:
                 logger.debug(f"Alert {alert_type} for {symbol} did not trigger (took {check_time:.2f}s)")
 
