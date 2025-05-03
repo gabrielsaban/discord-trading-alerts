@@ -630,26 +630,35 @@ class AlertScheduler:
                         notifications = []
 
                         # Format message with alert interval for processing
-                        for i, alert_msg in enumerate(alerts):
-                            # Format: alert_message | interval | symbol | alert_type
-                            formatted_alert = f"{alert_msg} | {interval} | {symbol}"
+                        for alert_tuple in alerts:
+                            # Handle both the new tuple format and legacy string format
+                            if isinstance(alert_tuple, tuple) and len(alert_tuple) == 2:
+                                # New format: (message, alert_object)
+                                alert_msg, alert_obj = alert_tuple
+                                # Get alert_type directly from the alert object that triggered this alert
+                                alert_type = getattr(alert_obj, 'alert_type', 'other')
+                            else:
+                                # Legacy format: just the message string
+                                alert_msg = alert_tuple
+                                alert_type = "other"  # Default value
                             
-                            # Use the alert_type from the corresponding alert object
-                            if i < len(manager.alerts[symbol]) and hasattr(manager.alerts[symbol][i], 'alert_type'):
-                                alert_type = manager.alerts[symbol][i].alert_type
-                                formatted_alert = f"{alert_msg} | {interval} | {symbol} | {alert_type}"
+                            # Format: alert_message | interval | symbol | alert_type
+                            formatted_alert = f"{alert_msg} | {interval} | {symbol} | {alert_type}"
                                 
                             notifications.append(formatted_alert)
 
                         # Record alerts in the database
-                        for i, alert in enumerate(alerts):
-                            # Get alert type from the corresponding alert object
-                            alert_type = "other"
-                            if i < len(manager.alerts[symbol]) and hasattr(manager.alerts[symbol][i], 'alert_type'):
-                                alert_type = manager.alerts[symbol][i].alert_type
+                        for alert_tuple in alerts:
+                            # Handle both the new tuple format and legacy string format
+                            if isinstance(alert_tuple, tuple) and len(alert_tuple) == 2:
+                                alert_msg, alert_obj = alert_tuple
+                                alert_type = getattr(alert_obj, 'alert_type', 'other')
+                            else:
+                                alert_msg = alert_tuple
+                                alert_type = "other"  # Default value
                             
                             db.record_alert(
-                                user_id, symbol, interval, alert_type, alert
+                                user_id, symbol, interval, alert_type, alert_msg
                             )
 
                         # Send modified alerts with interval included
@@ -687,14 +696,8 @@ class AlertScheduler:
                                     # Get the alert_type from the batch_alert if available
                                     alert_type = batch_alert.get("alert_type", "other")
 
-                                    # Format: original_alert | interval
-                                    modified_batch = (
-                                        f"{batch_message} | {batch_interval}"
-                                    )
-                                    
-                                    if alert_type:
-                                        modified_batch = f"{batch_message} | {batch_interval} | {symbol} | {alert_type}"
-                                        
+                                    # Format: message | interval | symbol | alert_type
+                                    modified_batch = f"{batch_message} | {batch_interval} | {symbol} | {alert_type}"
                                     modified_batched.append(modified_batch)
 
                                     # Record in database
