@@ -530,13 +530,18 @@ class TradingAlertsBot(discord.Client):
                                         continue
 
                                     # Check if this is one of our alert messages
-                                    if (
-                                        message.author.id == self.user.id
-                                        and message.embeds
-                                        and len(message.embeds) > 0
+                                    is_alert = (
+                                        message.author.id == self.user.id 
+                                        and message.embeds 
+                                        and len(message.embeds) > 0 
                                         and message.embeds[0].title
-                                        and "⚡" in message.embeds[0].title
-                                    ):
+                                        and ("⚡" in message.embeds[0].title or 
+                                             "⚠️" in message.embeds[0].title or 
+                                             message.embeds[0].title.startswith("Alert:") or
+                                             "Alert:" in message.embeds[0].title)
+                                    )
+
+                                    if is_alert:
                                         messages_to_delete.append(message)
 
                                 # Delete old messages
@@ -609,7 +614,10 @@ class TradingAlertsBot(discord.Client):
                 message.embeds
                 and len(message.embeds) > 0
                 and message.embeds[0].title
-                and "⚡" in message.embeds[0].title
+                and ("⚡" in message.embeds[0].title or 
+                     "⚠️" in message.embeds[0].title or 
+                     message.embeds[0].title.startswith("Alert:") or
+                     "Alert:" in message.embeds[0].title)
             )
 
             if not is_alert:
@@ -778,7 +786,10 @@ class TradingAlertsBot(discord.Client):
                 message.embeds
                 and len(message.embeds) > 0
                 and message.embeds[0].title
-                and "⚡" in message.embeds[0].title
+                and ("⚡" in message.embeds[0].title or 
+                     "⚠️" in message.embeds[0].title or 
+                     message.embeds[0].title.startswith("Alert:") or
+                     "Alert:" in message.embeds[0].title)
             )
 
             if not is_alert:
@@ -829,10 +840,14 @@ class TradingAlertsBot(discord.Client):
 
                 # Send DM to the user
                 try:
+                    # Extract the original title and description
+                    original_title = message.embeds[0].title if message.embeds[0].title else "Crypto Alert"
+                    original_description = message.embeds[0].description if message.embeds[0].description else ""
+                    
                     # Create a nice embed for the DM
                     dm_embed = discord.Embed(
-                        title=f"📊 Explanation: {alert_type}" if alert_type else "📊 Alert Explanation",
-                        description=f"**Alert for {symbol}**\n\n{explanation}",
+                        title=f"📊 {original_title}",
+                        description=f"{original_description}\n\n**Explanation:**\n{explanation}",
                         color=message.embeds[0].color
                     )
                     
@@ -1596,7 +1611,10 @@ async def cleanup_command(interaction: discord.Interaction, count: int = 50):
                 and message.embeds 
                 and len(message.embeds) > 0 
                 and message.embeds[0].title
-                and "⚡" in message.embeds[0].title
+                and ("⚡" in message.embeds[0].title or 
+                     "⚠️" in message.embeds[0].title or 
+                     message.embeds[0].title.startswith("Alert:") or
+                     "Alert:" in message.embeds[0].title)
             )
 
             if is_alert:
