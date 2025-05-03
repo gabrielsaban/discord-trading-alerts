@@ -634,8 +634,7 @@ class AlertScheduler:
                             # Format: alert_message | interval | symbol | alert_type
                             formatted_alert = f"{alert_msg} | {interval} | {symbol}"
                             
-                            # If the alert object has an alert_type attribute, include it in the message
-                            # Use the same index as the alert message to get the correct alert type
+                            # Use the alert_type from the corresponding alert object
                             if i < len(manager.alerts[symbol]) and hasattr(manager.alerts[symbol][i], 'alert_type'):
                                 alert_type = manager.alerts[symbol][i].alert_type
                                 formatted_alert = f"{alert_msg} | {interval} | {symbol} | {alert_type}"
@@ -643,8 +642,12 @@ class AlertScheduler:
                             notifications.append(formatted_alert)
 
                         # Record alerts in the database
-                        for alert in alerts:
-                            alert_type = self._extract_alert_type(alert)
+                        for i, alert in enumerate(alerts):
+                            # Get alert type from the corresponding alert object
+                            alert_type = "other"
+                            if i < len(manager.alerts[symbol]) and hasattr(manager.alerts[symbol][i], 'alert_type'):
+                                alert_type = manager.alerts[symbol][i].alert_type
+                            
                             db.record_alert(
                                 user_id, symbol, interval, alert_type, alert
                             )
@@ -680,15 +683,21 @@ class AlertScheduler:
                                         "interval", interval
                                     )
                                     batch_message = batch_alert["message"]
+                                    
+                                    # Get the alert_type from the batch_alert if available
+                                    alert_type = batch_alert.get("alert_type", "other")
 
                                     # Format: original_alert | interval
                                     modified_batch = (
                                         f"{batch_message} | {batch_interval}"
                                     )
+                                    
+                                    if alert_type:
+                                        modified_batch = f"{batch_message} | {batch_interval} | {symbol} | {alert_type}"
+                                        
                                     modified_batched.append(modified_batch)
 
                                     # Record in database
-                                    alert_type = self._extract_alert_type(batch_message)
                                     db.record_alert(
                                         user_id,
                                         symbol,
@@ -832,28 +841,6 @@ class AlertScheduler:
 
         if "pattern" in alerts_to_setup:
             manager.add_alert(PatternAlert(symbol, cooldown_minutes=cooldown))
-
-    def _extract_alert_type(self, alert_message: str) -> str:
-        """Extract the alert type from an alert message"""
-        if "RSI" in alert_message:
-            return "rsi"
-        elif "MACD" in alert_message:
-            return "macd"
-        elif "EMA" in alert_message:
-            return "ema"
-        elif "BOLLINGER" in alert_message or "BB " in alert_message:
-            return "bb"
-        elif "VOLUME" in alert_message:
-            return "volume"
-        elif "ADX" in alert_message or "TREND" in alert_message:
-            return "adx"
-        elif any(
-            pattern in alert_message
-            for pattern in ["HAMMER", "STAR", "ENGULFING", "PATTERN"]
-        ):
-            return "pattern"
-        else:
-            return "other"
 
     def add_symbol(self, symbol: str, interval: str):
         """Add a new symbol to be monitored"""
