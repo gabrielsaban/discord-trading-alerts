@@ -630,13 +630,14 @@ class AlertScheduler:
                         notifications = []
 
                         # Format message with alert interval for processing
-                        for alert_msg in alerts:
+                        for i, alert_msg in enumerate(alerts):
                             # Format: alert_message | interval | symbol | alert_type
                             formatted_alert = f"{alert_msg} | {interval} | {symbol}"
                             
                             # If the alert object has an alert_type attribute, include it in the message
-                            if hasattr(manager.alerts[symbol][0], 'alert_type'):
-                                alert_type = manager.alerts[symbol][0].alert_type
+                            # Use the same index as the alert message to get the correct alert type
+                            if i < len(manager.alerts[symbol]) and hasattr(manager.alerts[symbol][i], 'alert_type'):
+                                alert_type = manager.alerts[symbol][i].alert_type
                                 formatted_alert = f"{alert_msg} | {interval} | {symbol} | {alert_type}"
                                 
                             notifications.append(formatted_alert)
