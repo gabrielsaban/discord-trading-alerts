@@ -244,18 +244,7 @@ class TradingAlertsBot(discord.Client):
         await message.add_reaction("📌")  # Pin reaction
 
     async def send_alert_notification(self, user_id: str, alerts: List[str]):
-        """Send alert notifications to the specified user"""
-        # Skip if no channels are registered for this user
-        if user_id not in self.alert_channels or not self.alert_channels[user_id]:
-            logger.warning(f"No channels registered for user {user_id}")
-            return
-
-        # Get user data
-        user = self.db.get_user(user_id)
-        if not user:
-            logger.warning(f"User {user_id} not found in database")
-            return
-
+        """Send alert notifications to all users watching the relevant symbol/interval"""
         # Safety check to make sure we're running in an asyncio task
         try:
             asyncio.current_task()
@@ -264,142 +253,121 @@ class TradingAlertsBot(discord.Client):
                 "send_alert_notification called outside of an asyncio task context"
             )
             return
-
-        # Send alerts to all registered channels
-        for channel in self.alert_channels[user_id]:
+            
+        # Process each alert
+        for alert in alerts:
             try:
-                # Try to get a fresh channel reference to avoid stale references
-                current_channel = channel
-                if hasattr(self, "get_channel"):
-                    fetched_channel = self.get_channel(channel.id)
-                    if fetched_channel is not None:
-                        current_channel = fetched_channel
+                # Extract symbol and interval from the alert message
+                symbol = "Unknown"
+                interval = "Unknown"
+                alert_type = ""
+                alert_parts = alert.split("|")
+                
+                # Format should be: alert_message | interval | symbol | alert_type
+                if len(alert_parts) >= 3:
+                    # Get interval from the second part
+                    interval = alert_parts[1].strip()
+                    # Get symbol from the third part
+                    symbol = alert_parts[2].strip()
+                    # Get alert type if available
+                    if len(alert_parts) >= 4:
+                        alert_type = alert_parts[3].strip()
+                
+                # If we don't have valid symbol/interval, we can't continue
+                if symbol == "Unknown" or interval == "Unknown":
+                    logger.warning(f"Could not extract symbol or interval from alert: {alert}")
+                    continue
+                
+                # Get all users watching this symbol/interval
+                users = self.db.get_users_watching_symbol(symbol, interval)
+                if not users:
+                    logger.warning(f"No users watching {symbol} ({interval})")
+                    continue
+                    
+                # Create a mention string for all users
+                user_mentions = ' '.join(f'<@{uid}>' for uid in users)
+                
+                # Original alert message without the routing information
+                clean_alert = alert_parts[0].strip()
+                
+                # Set title format
+                title = f"⚡ {symbol} ({interval})"
+                
+                # Add alert type to title if available
+                if alert_type:
+                    title = f"⚡ {symbol} ({interval}) - {alert_type}"
+                
+                # Format the alert message
+                if "\nPrice: " in clean_alert:
+                    # Regular alert with price
+                    parts = clean_alert.split("\nPrice: ")
+                    alert_header = parts[0]
+                    price_and_details = parts[1]
 
-                # Process each alert
-                for alert in alerts:
-                    try:
-                        # Extract symbol from alert message
-                        # First try from the pipe-delimited format
-                        symbol = "Unknown"
-                        alert_parts = alert.split("|")
+                    # Check if there are detailed threshold values after the price
+                    if "\n" in price_and_details:
+                        price_part, details_part = price_and_details.split("\n", 1)
+                        reformatted_alert = f"{user_mentions}\n{alert_header}\nPrice: {price_part}\n{details_part}"
+                    else:
+                        reformatted_alert = f"{user_mentions}\n{alert_header}\nPrice: {price_and_details}"
+                else:
+                    # Regular alert without price
+                    reformatted_alert = f"{user_mentions}\n{clean_alert}"
+                
+                # Create embed
+                embed = discord.Embed(
+                    title=title,
+                    description=reformatted_alert,
+                    color=self._get_color_for_alert(clean_alert),
+                )
+                
+                # Add timestamp
+                embed.timestamp = discord.utils.utcnow()
+                
+                # Send to all alert channels for all users watching this symbol/interval
+                sent_channels = set()  # Track which channels we've already sent to
+                
+                for uid in users:
+                    # Skip if no channels are registered for this user
+                    if uid not in self.alert_channels or not self.alert_channels[uid]:
+                        continue
                         
-                        # Format should be: alert_message | interval | symbol | alert_type
-                        # We'll modify scheduler.py to include symbol in the message
-                        if len(alert_parts) >= 3:
-                            # Use symbol from third part if available
-                            symbol_part = alert_parts[2].strip()
-                            if symbol_part and symbol_part != "Unknown":
-                                symbol = symbol_part
-                        
-                        # If we still don't have a symbol, try old method
-                        if symbol == "Unknown" and ":" in alert:
-                            try:
-                                symbol = alert.split(":")[1].split()[0]
-                            except:
-                                symbol = "Unknown"
-                                
-                        # Get interval from the alert message
-                        interval = "Unknown"
-                        if len(alert_parts) >= 2:
-                            # Extract interval from the second part
-                            interval = alert_parts[1].strip()
-                        else:
-                            # Fallback to database lookup
-                            watchlist = self.db.get_user_watchlist(user_id)
-                            for item in watchlist:
-                                if item["symbol"] == symbol:
-                                    interval = item["interval"]
-                                    break
-
-                        # Use only the alert message part without the interval
-                        clean_alert = alert_parts[0].strip()
-
-                        # Add user mention
-                        user_mention = f"<@{user_id}>"
-                        
-                        # Extract alert type for explanations
-                        alert_type = ""
-                        if "**" in alert:
-                            parts = alert.split("**")
-                            if len(parts) >= 3:
-                                alert_type = parts[1]  # Get text between first set of **
-
-                        # Try to get alert type from AlertManager if available
-                        # New format: alert_message | interval | symbol | alert_type
-                        if len(alert_parts) >= 4 and alert_parts[3].strip():
-                            alert_type = alert_parts[3].strip()
-                        # Fall back to old format if needed
-                        elif len(alert_parts) >= 3 and alert_parts[2].strip() and not alert_parts[2].strip() in ["BTCUSDT", "ETHUSDT"]:
-                            # This handles the old format where the third part is alert_type, not symbol
-                            alert_type = alert_parts[2].strip()
-
-                        if "\nPrice: " in clean_alert:
-                            # Regular alert with price
-                            parts = clean_alert.split("\nPrice: ")
-                            alert_header = parts[0]
-                            price_and_details = parts[1]
-
-                            # Check if there are detailed threshold values after the price
-                            if "\n" in price_and_details:
-                                price_part, details_part = price_and_details.split(
-                                    "\n", 1
-                                )
-                                reformatted_alert = f"{user_mention}\n{alert_header}\nPrice: {price_part}\n{details_part}"
-                                logger.debug(
-                                    f"Alert with detailed threshold info: {details_part}"
-                                )
-                            else:
-                                reformatted_alert = f"{user_mention}\n{alert_header}\nPrice: {price_and_details}"
-                        else:
-                            # Regular alert without price
-                            reformatted_alert = f"{user_mention}\n{clean_alert}"
-
-                        # Set new title format
-                        title = f"⚡ {symbol} ({interval})"
-                        
-                        # Add alert type to title if available
-                        if alert_type:
-                            title = f"⚡ {symbol} ({interval}) - {alert_type}"
-
-                        # Create embed with custom title
-                        embed = discord.Embed(
-                            title=title,
-                            description=reformatted_alert,
-                            color=self._get_color_for_alert(alert),
-                        )
-
-                        # Add timestamp
-                        embed.timestamp = discord.utils.utcnow()
-
-                        # Simple direct send without any nested coroutines or tasks
+                    # Send to each channel this user has registered
+                    for channel in self.alert_channels[uid]:
+                        # Skip if we've already sent to this channel
+                        if channel.id in sent_channels:
+                            continue
+                            
                         try:
+                            # Try to get a fresh channel reference
+                            current_channel = channel
+                            if hasattr(self, "get_channel"):
+                                fetched_channel = self.get_channel(channel.id)
+                                if fetched_channel is not None:
+                                    current_channel = fetched_channel
+                            
+                            # Send the alert
                             message = await current_channel.send(embed=embed)
-                            logger.info(
-                                f"Sent alert for {symbol} ({interval}) to channel {current_channel.id}"
-                            )
-
-                            # Add only question mark reaction for explanation
+                            logger.info(f"Sent alert for {symbol} ({interval}) to channel {current_channel.id}")
+                            
+                            # Add question mark reaction for explanation
                             await message.add_reaction("❓")
-
+                            
                             # Store message ID and alert type
                             self.alert_messages[message.id] = alert_type
-
+                            
+                            # Mark this channel as sent
+                            sent_channels.add(channel.id)
+                            
                         except Exception as e:
-                            logger.error(
-                                f"Failed to send alert to channel {current_channel.id}: {e}"
-                            )
-
-                        # Add a small delay between alerts to avoid rate limiting
-                        await asyncio.sleep(1.0)
-
-                    except Exception as e:
-                        logger.error(
-                            f"Error processing alert for channel {current_channel.id}: {e}"
-                        )
+                            logger.error(f"Failed to send alert to channel {channel.id}: {e}")
+                
+                # Add a small delay between alerts to avoid rate limiting
+                await asyncio.sleep(1.0)
+                
             except Exception as e:
-                logger.error(f"Error accessing channel for user {user_id}: {e}")
+                logger.error(f"Error processing alert: {e}")
                 import traceback
-
                 logger.error(f"Alert error details: {traceback.format_exc()}")
 
     def _get_color_for_alert(self, alert: str) -> discord.Color:
