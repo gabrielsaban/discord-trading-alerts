@@ -107,6 +107,35 @@ class CooldownService:
         # Load cooldowns from the repository on initialization
         self._load_from_repository()
 
+    def _create_cooldown_key(
+        self, symbol: str, alert_type: str, alert_subtype: str = None, interval: str = None
+    ) -> str:
+        """
+        Create a consistent cooldown key following the format:
+        f"{symbol}_{alert_type}_{alert_subtype or 'None'}_{interval}"
+        
+        Parameters:
+        -----------
+        symbol : str
+            Trading pair symbol
+        alert_type : str
+            Alert class name (e.g., 'RsiAlert')
+        alert_subtype : str, optional
+            Specific alert condition (e.g., 'OVERSOLD', 'OVERBOUGHT')
+        interval : str, optional
+            Timeframe of the alert (e.g., '5m', '1h', '4h')
+            
+        Returns:
+        --------
+        str
+            Formatted cooldown key
+        """
+        # Alert type must always be provided
+        alert_subtype_str = str(alert_subtype) if alert_subtype is not None else "None"
+        interval_str = str(interval) if interval is not None else "None"
+        
+        return f"{symbol}_{alert_type}_{alert_subtype_str}_{interval_str}"
+
     def _load_from_repository(self):
         """Load cooldowns from the repository into memory"""
         with self.lock:
@@ -201,20 +230,12 @@ class CooldownService:
         now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
 
         with self.lock:
-            # Create a unique cooldown key that includes the interval to achieve interval-specific cooldowns
-            cooldown_key = f"{symbol}"
-            if alert_subtype:
-                cooldown_key = f"{symbol}_{alert_subtype}"
-            else:
-                cooldown_key = f"{symbol}_{alert_type}"
-                
-            # Add interval to the cooldown key if provided
-            if interval:
-                cooldown_key = f"{cooldown_key}_{interval}"
+            # Create a consistent cooldown key using the dedicated method
+            cooldown_key = self._create_cooldown_key(symbol, alert_type, alert_subtype, interval)
 
             # Log cooldown check attempt
             logger.debug(
-                f"Checking cooldown for {cooldown_key} (Interval: {interval or 'unknown'})"
+                f"Checking cooldown for {cooldown_key} (Interval: {interval or 'None'})"
             )
 
             # Special case for 4h/1d signals - they bypass lower timeframe cooldowns
@@ -222,12 +243,10 @@ class CooldownService:
             is_higher_timeframe = interval in ["4h", "1d"]
 
             if is_higher_timeframe:
-                # For 4h/1d, we only check if this specific interval has triggered recently
-                specific_key = f"{cooldown_key}"  # Already includes interval
-
-                if specific_key in self.cooldowns:
+                # For 4h/1d, we already have the correct key via _create_cooldown_key
+                if cooldown_key in self.cooldowns:
                     # Get cooldown info for this specific higher timeframe alert
-                    cooldown_info = self.cooldowns[specific_key]
+                    cooldown_info = self.cooldowns[cooldown_key]
                     last_triggered = cooldown_info.get("timestamp")
 
                     # Fixed 24h cooldown for 4h/1d to prevent exact duplicates
@@ -337,22 +356,8 @@ class CooldownService:
         now = datetime.utcnow() + timedelta(hours=1)  # Add 1 hour to match batch_aggregator
 
         with self.lock:
-            # Create a unique cooldown key that includes the interval
-            cooldown_key = f"{symbol}"
-            if alert_subtype:
-                cooldown_key = f"{symbol}_{alert_subtype}"
-            else:
-                cooldown_key = f"{symbol}_{alert_type}"
-                
-            # Add interval to the cooldown key if provided
-            if interval:
-                cooldown_key = f"{cooldown_key}_{interval}"
-                
-            # Special handling for 4h/1d signals - they get a separate cooldown key
-            is_higher_timeframe = interval in ["4h", "1d"]
-            if is_higher_timeframe:
-                # The cooldown key already includes the interval
-                pass
+            # Create a consistent cooldown key using the dedicated method
+            cooldown_key = self._create_cooldown_key(symbol, alert_type, alert_subtype, interval)
 
             # Update or create the cooldown entry
             cooldown_data = {
@@ -368,7 +373,7 @@ class CooldownService:
             self.repository.set_cooldown(cooldown_key, cooldown_data.copy())
 
             logger.debug(
-                f"Updated cooldown for {cooldown_key} with interval {interval} and strength {signal_strength:.1f}"
+                f"Updated cooldown for {cooldown_key} with interval {interval or 'None'} and strength {signal_strength:.1f}"
             )
 
             # Auto-save the repository if enabled
@@ -498,16 +503,8 @@ class CooldownService:
             Cooldown information if found, None otherwise
         """
         with self.lock:
-            # Create cooldown key
-            cooldown_key = f"{symbol}"
-            if alert_subtype:
-                cooldown_key = f"{symbol}_{alert_subtype}"
-            else:
-                cooldown_key = f"{symbol}_{alert_type}"
-                
-            # Add interval to the cooldown key if provided
-            if interval:
-                cooldown_key = f"{cooldown_key}_{interval}"
+            # Create a consistent cooldown key using the dedicated method
+            cooldown_key = self._create_cooldown_key(symbol, alert_type, alert_subtype, interval)
 
             # Get cooldown data
             cooldown_data = self.cooldowns.get(cooldown_key)
