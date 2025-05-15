@@ -307,12 +307,12 @@ class TradingAlertsBot(discord.Client):
                     # Check if there are detailed threshold values after the price
                     if "\n" in price_and_details:
                         price_part, details_part = price_and_details.split("\n", 1)
-                        reformatted_alert = f"{user_mentions}\n{alert_header}\nPrice: {price_part}\n{details_part}"
+                        reformatted_alert = f"{user_mentions}\n\n{alert_header}\nPrice: {price_part}\n{details_part}"
                     else:
-                        reformatted_alert = f"{user_mentions}\n{alert_header}\nPrice: {price_and_details}"
+                        reformatted_alert = f"{user_mentions}\n\n{alert_header}\nPrice: {price_and_details}"
                 else:
                     # Regular alert without price
-                    reformatted_alert = f"{user_mentions}\n{clean_alert}"
+                    reformatted_alert = f"{user_mentions}\n\n{clean_alert}"
                 
                 # Create embed
                 embed = discord.Embed(

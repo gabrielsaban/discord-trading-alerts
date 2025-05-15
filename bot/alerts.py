@@ -156,7 +156,7 @@ class RsiAlert(AlertCondition):
                 f"RSI oversold alert triggered for {self.symbol}: prev_rsi={prev_rsi:.1f}, latest_rsi={latest_rsi:.1f}, threshold={self.oversold}"
             )
             message = (
-                f"🟥  **Price:** {price_str}  \n"
+                f"🟥  **Price:** {price_str}  \n\n"
                 f"**RSI Now:** {latest_rsi:.1f}  \n"
                 f"**Threshold:** {self.oversold}  \n"
                 f"**Previous RSI:** {prev_rsi:.1f}"
@@ -168,7 +168,7 @@ class RsiAlert(AlertCondition):
                 f"RSI overbought alert triggered for {self.symbol}: prev_rsi={prev_rsi:.1f}, latest_rsi={latest_rsi:.1f}, threshold={self.overbought}"
             )
             message = (
-                f"🟩  **Price:** {price_str}  \n"
+                f"🟩  **Price:** {price_str}  \n\n"
                 f"**RSI Now:** {latest_rsi:.1f}  \n"
                 f"**Threshold:** {self.overbought}  \n"
                 f"**Previous RSI:** {prev_rsi:.1f}"
@@ -200,7 +200,7 @@ class MacdAlert(AlertCondition):
             self.alert_type = "MACD Bullish Cross"
             emoji = "🟢"
             message = (
-                f"{emoji}  **Price:** {price_str}  \n"
+                f"{emoji}  **Price:** {price_str}  \n\n"
                 f"**MACD Line:** {latest['MACD']:.4f}  \n"
                 f"**Signal Line:** {latest['Signal']:.4f}  \n"
                 f"**Histogram:** {latest['Histogram']:.4f}  \n"
@@ -214,7 +214,7 @@ class MacdAlert(AlertCondition):
             self.alert_type = "MACD Bearish Cross"
             emoji = "🔴"
             message = (
-                f"{emoji}  **Price:** {price_str}  \n"
+                f"{emoji}  **Price:** {price_str}  \n\n"
                 f"**MACD Line:** {latest['MACD']:.4f}  \n"
                 f"**Signal Line:** {latest['Signal']:.4f}  \n"
                 f"**Histogram:** {latest['Histogram']:.4f}  \n"
@@ -259,7 +259,7 @@ class EmaCrossAlert(AlertCondition):
         if ema_df["Cross_Up"].iloc[-1]:
             self.alert_type = "EMA Bullish Cross"
             message = (
-                f"🟢  **Price:** {price_str}  \n"
+                f"🟢  **Price:** {price_str}  \n\n"
                 f"**EMA{self.short}:** {latest_short_ema:.4f}  \n"
                 f"**EMA{self.long}:** {latest_long_ema:.4f}  \n"
                 f"**Crossover Gap:** {crossover_gap:.2f}"
@@ -268,7 +268,7 @@ class EmaCrossAlert(AlertCondition):
         elif ema_df["Cross_Down"].iloc[-1]:
             self.alert_type = "EMA Bearish Cross"
             message = (
-                f"🔴  **Price:** {price_str}  \n"
+                f"🔴  **Price:** {price_str}  \n\n"
                 f"**EMA{self.short}:** {latest_short_ema:.4f}  \n"
                 f"**EMA{self.long}:** {latest_long_ema:.4f}  \n"
                 f"**Crossover Gap:** {crossover_gap:.2f}"
@@ -307,7 +307,7 @@ class BollingerBandAlert(AlertCondition):
             breakout_distance = latest_price - current["BBU"]
             self.alert_type = "Upper BB Breakout"
             message = (
-                f"🟡  **Price:** {price_str}  \n"
+                f"🟡  **Price:** {price_str}  \n\n"
                 f"**Upper Band:** {current['BBU']:.2f}  \n"
                 f"**Middle Band:** {current['BBM']:.2f}  \n"
                 f"**Lower Band:** {current['BBL']:.2f}  \n"
@@ -320,7 +320,7 @@ class BollingerBandAlert(AlertCondition):
             breakout_distance = latest_price - current["BBL"]
             self.alert_type = "Lower BB Breakout"
             message = (
-                f"🟥  **Price:** {price_str}  \n"
+                f"🟥  **Price:** {price_str}  \n\n"
                 f"**Upper Band:** {current['BBU']:.2f}  \n"
                 f"**Middle Band:** {current['BBM']:.2f}  \n"
                 f"**Lower Band:** {current['BBL']:.2f}  \n"
@@ -334,7 +334,7 @@ class BollingerBandAlert(AlertCondition):
         ):
             self.alert_type = "Bollinger Squeeze"
             message = (
-                f"🟡  **Price:** {price_str}  \n"
+                f"🟡  **Price:** {price_str}  \n\n"
                 f"**Bandwidth:** {current['BandWidth']:.2f}  \n"
                 f"**Threshold:** {self.squeeze_threshold}"
             )
@@ -387,14 +387,14 @@ class VolumeSpikeAlert(AlertCondition):
 
         if self.z_score:
             message = (
-                f"🟡  **Price:** {price_str}  \n"
+                f"🟡  **Price:** {price_str}  \n\n"
                 f"**Current Z-Score:** {latest['z_score']:.2f}  \n"
                 f"**Threshold:** {self.threshold}  \n"
                 f"{prev_value_text}"
             )
         else:
             message = (
-                f"🟡  **Price:** {price_str}  \n"
+                f"🟡  **Price:** {price_str}  \n\n"
                 f"**Current Volume Multiple:** {latest['volume_ratio']:.1f}x  \n"
                 f"**Threshold:** {self.threshold}x  \n"
                 f"{prev_value_text}"
@@ -427,7 +427,7 @@ class AdxAlert(AlertCondition):
             direction = "BULLISH" if latest["Trend"] == "Bullish" else "BEARISH"
             self.alert_type = f"Strong {latest['Trend'].upper()} Trend"
             message = (
-                f"📏  **Price:** {price_str}  \n"
+                f"📏  **Price:** {price_str}  \n\n"
                 f"**ADX:** {latest['ADX']:.1f}\n"
                 f"**Threshold:** {self.threshold}\n"
                 f"**Direction:** {latest['Trend']}"
@@ -440,7 +440,7 @@ class AdxAlert(AlertCondition):
             new_direction = "BULLISH" if latest["Trend"] == "Bullish" else "BEARISH"
             self.alert_type = f"Trend Reversal to {latest['Trend'].upper()}"
             message = (
-                f"🔄  **Price:** {price_str}  \n"
+                f"🔄  **Price:** {price_str}  \n\n"
                 f"**ADX:** {latest['ADX']:.1f}\n"
                 f"**Threshold:** {self.threshold}\n"
                 f"**Direction:** {latest['Trend']}"
@@ -479,7 +479,7 @@ class PatternAlert(AlertCondition):
                 candles.iloc[-1]["open"], candles.iloc[-1]["close"]
             )
             message = (
-                f"🔨  **Price:** {price_str}  \n"
+                f"🔨  **Price:** {price_str}  \n\n"
                 f"**Body Size:** {body:.2f}  \n"
                 f"**Lower Wick:** {lower_wick:.2f}  \n"
                 f"**Upper Wick:** {upper_wick:.2f}  \n"
@@ -490,7 +490,7 @@ class PatternAlert(AlertCondition):
         elif self._is_evening_star(candles.iloc[-3:]):
             self.alert_type = "Evening Star Pattern"
             message = (
-                f"⭐  **Price:** {price_str}  \n"
+                f"⭐  **Price:** {price_str}  \n\n"
                 f"**Pattern:** Bullish → Doji → Bearish  \n"
                 f"**Confidence:** High"
             )
@@ -499,7 +499,7 @@ class PatternAlert(AlertCondition):
         elif self._is_morning_star(candles.iloc[-3:]):
             self.alert_type = "Morning Star Pattern"
             message = (
-                f"⭐  **Price:** {price_str}  \n"
+                f"⭐  **Price:** {price_str}  \n\n"
                 f"**Pattern:** Bearish → Doji → Bullish  \n"
                 f"**Confidence:** High"
             )
@@ -517,7 +517,7 @@ class PatternAlert(AlertCondition):
             body_ratio = c2_body / c1_body if c1_body > 0 else 0
             confidence = "High" if body_ratio > 1.5 else "Medium"
             message = (
-                f"🔄  **Price:** {price_str}  \n"
+                f"🔄  **Price:** {price_str}  \n\n"
                 f"**Body Ratio:** {body_ratio:.1f}x  \n"
                 f"**Confidence:** {confidence}"
             )
